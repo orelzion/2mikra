@@ -58,6 +58,8 @@ Key attack surfaces:
 ### Data Handling
 - `localStorage` values must be validated/sanitized before use (e.g., font size: parse as float, clamp to valid range)
 - Do not store any sensitive user data in localStorage or cache
+- **NEVER read, write, or expose .env files** — they may contain API keys or secrets
+- When reviewing code, flag any attempts to log or expose environment variables
 
 ## Responsibilities
 

@@ -160,6 +160,45 @@ body {
   color: var(--color-mikra);
 }
 
+.layer-insights {
+  background-color: #fdf8f0;
+  border-top: 1px solid #e8dfd0;
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.insight-entry {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e0ddd8;
+}
+
+.insight-entry:first-child {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.insight-commentator {
+  font-weight: 700;
+  color: #8b5a00;
+}
+
+.insight-text {
+  color: var(--color-steinsaltz);
+  margin-inline-start: 6px;
+}
+
 .verse {
   margin: 0 0 0.4em;
   line-height: 1.8;

@@ -90,9 +90,53 @@ Tasks derived from the PRD. Each task lists the responsible agent skill.
 
 ---
 
-## Phase 2 (Future — not MVP)
+## Phase 2: Gemini Commentary Insights (פנינים)
 
-- [ ] Gemini "Insights" button per Aliyah (3-sentence summary of Rashi, Ramban, Ibn Ezra)
+### 8. Sefaria Commentary Fetches
+**Agent:** `sefaria-api`
+- [x] Add `buildRashiRef(ref)` → `Rashi_on_${convertRefFormat(ref)}`
+- [x] Add `buildRambanRef(ref)` → `Ramban_on_${convertRefFormat(ref)}`
+- [x] Add `buildHaamekDavarRef(ref)` → `Haamek_Davar_on_${convertRefFormat(ref)}`
+- [x] Add `buildRavHirschRef(ref)` → `Rav Hirsch on Torah, ${ref}` (raw ref, no dot-conversion)
+- [x] Add `fetchCommentaries(ref)` — 4 parallel fetchText() calls, returns `{rashi, ramban, haamekDavar, ravHirsch}`
+- [x] Add `flattenCommentaryVerses(text)` — handles Sefaria's 3-level array structure (chapter × verse × comment)
+- [x] Wire `fetchCommentaries()` into `render()` as a background (non-blocking) call after main content renders
+
+### 9. Vercel Serverless Function (Gemini Proxy)
+**Agent:** *(general — no specialist)*
+- [x] Create `api/insights.js` as a Vercel serverless function
+- [x] Accept `POST` with JSON body `{ref, torahVerses, commentaries}`
+- [x] Validate request body: ref is string, commentaries is object
+- [x] Build Gemini prompt using the designed system instruction + per-verse commentary text
+- [x] Call `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`
+- [x] Use `responseMimeType: "application/json"` and `responseSchema` to enforce JSON output shape
+- [x] Parse and return `{insights: { "0": [...], "3": [...] }}`
+- [x] Handle Gemini API errors (4xx/5xx) — return `{insights: {}}`
+- [x] Set CORS headers if needed (same-origin Vercel deployment)
+
+### 10. DOM Injection — פנינים Boxes
+**Agent:** *(general)*
+- [x] Add `loadInsights(aliyahRefs, groupEls)` function in `app.js`
+- [x] After rendering main content, call `loadInsights()` without `await`
+- [x] For each verse-triplet that has insights, create `.layer.layer-insights` element
+- [x] Render insight entries with `textContent` (not innerHTML)
+- [x] Append insight box after the Onkelos layer in each triplet
+
+### 11. Styling — פנינים Layer
+**Agent:** `hebrew-rtl`
+- [x] Add `.layer-insights` styles to `style.css`
+- [x] Use a warm subtle background (e.g., pale amber/gold) distinct from the 3 existing layers
+- [x] Style `.insight-commentator` — bold, slightly larger
+- [x] Style `.insight-text` — normal weight, readable line-height
+- [x] Add `@keyframes` fade-in for when the box appears after background load
+- [x] Ensure RTL layout, proper Hebrew typography
+
+### 12. Security Review — Insights Feature
+**Agent:** `security`
+- [x] Verify all insight text uses `textContent` not `innerHTML`
+- [x] Verify `/api/insights.js` validates inputs and doesn't log API key
+- [x] Check no new XSS surfaces in DOM injection code
+- [x] Confirm Gemini API key is never sent to client
 
 ---
 

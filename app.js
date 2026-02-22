@@ -107,6 +107,22 @@ function buildOnkelosRef(ref) {
   return `Onkelos_${convertRefFormat(ref)}`;
 }
 
+function buildRashiRef(ref) {
+  return `Rashi_on_${convertRefFormat(ref)}`;
+}
+
+function buildRambanRef(ref) {
+  return `Ramban_on_${convertRefFormat(ref)}`;
+}
+
+function buildHaamekDavarRef(ref) {
+  return `Haamek_Davar_on_${convertRefFormat(ref)}`;
+}
+
+function buildRavHirschRef(ref) {
+  return `Rav Hirsch on Torah, ${ref}`;
+}
+
 // ─── Sefaria API ──────────────────────────────────────────────────────────────
 
 async function fetchCalendar() {
@@ -183,6 +199,51 @@ async function fetchAliyahTexts(ref) {
   };
 }
 
+async function fetchCommentaries(ref) {
+  const [rashiData, rambanData, haamekDavarData, ravHirschData] = await Promise.all([
+    fetchText(buildRashiRef(ref)),
+    fetchText(buildRambanRef(ref)),
+    fetchText(buildHaamekDavarRef(ref)),
+    fetchText(buildRavHirschRef(ref)),
+  ]);
+
+  const rashiVersion = rashiData?.versions?.find(v => v.language === 'he' && v.isPrimary) 
+    ?? rashiData?.versions?.[0];
+  const rambanVersion = rambanData?.versions?.find(v => v.language === 'he' && v.isPrimary)
+    ?? rambanData?.versions?.[0];
+  const haamekDavarVersion = haamekDavarData?.versions?.find(v => v.language === 'he')
+    ?? haamekDavarData?.versions?.[0];
+  const ravHirschVersion = ravHirschData?.versions?.[0];
+
+  return {
+    rashi:       rashiVersion?.text       ?? null,
+    ramban:      rambanVersion?.text      ?? null,
+    haamekDavar: haamekDavarVersion?.text ?? null,
+    ravHirsch:   ravHirschVersion?.text   ?? null,
+  };
+}
+
+/**
+ * Flatten commentary text from Sefaria's 3-level structure:
+ * text[chapter][verse][commentIndex] into flat array of verse arrays.
+ * Each element is an array of comment strings for that verse.
+ */
+function flattenCommentaryVerses(text) {
+  if (!text) return [];
+  if (typeof text === 'string') return [[text.trim()]].filter(Boolean);
+  if (text.every(v => typeof v === 'string')) {
+    return text.map(v => [v.trim()].filter(Boolean));
+  }
+  return text.flatMap(chapter => {
+    if (typeof chapter === 'string') return [[chapter.trim()]].filter(Boolean);
+    return chapter.map(v => {
+      if (Array.isArray(v)) return v.filter(Boolean).map(c => c.trim());
+      if (typeof v === 'string') return [v.trim()];
+      return [];
+    });
+  });
+}
+
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
 /**
@@ -219,9 +280,10 @@ function buildVerseGroupEl(texts) {
 
   const count = Math.max(mikraVerses.length, steinsaltzVerses.length, onkelosVerses.length);
 
-  for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i++) {
     const triplet = document.createElement('div');
     triplet.className = 'verse-triplet';
+    triplet.dataset.verseIndex = i;
 
     // ── Mikra (contains HTML entities and <b> paseq markers) ──
     if (mikraVerses[i] !== undefined) {
@@ -337,12 +399,136 @@ async function render() {
       containerEl.appendChild(groupEl);
     });
 
+    loadInsights(aliyahRefs, containerEl);
+
   } catch (err) {
     containerEl.innerHTML = '';
     const errEl = document.createElement('div');
     errEl.className   = 'error';
     errEl.textContent = 'שגיאה בטעינת הטקסטים';
     containerEl.appendChild(errEl);
+  }
+}
+
+async function loadInsights(aliyahRefs, containerEl) {
+  console.log('loadInsights called', { aliyahRefs });
+  try {
+    console.log('Fetching commentaries...');
+    const commentaries = await Promise.all(aliyahRefs.map(fetchCommentaries));
+    console.log('Fetching mikra texts...');
+    const mikraTexts = await Promise.all(aliyahRefs.map(async ref => {
+      const data = await fetchText(convertRefFormat(ref));
+      const version = selectVersion(data, ['Miqra according to the Masorah', "Tanach with Ta'amei Hamikra"]);
+      return flattenVerses(version?.text ?? null);
+    }));
+
+    const torahVerses = mikraTexts.flat();
+    const flattenedCommentaries = commentaries.map(c => ({
+      rashi: flattenCommentaryVerses(c.rashi),
+      ramban: flattenCommentaryVerses(c.ramban),
+      haamekDavar: flattenCommentaryVerses(c.haamekDavar),
+      ravHirsch: flattenCommentaryVerses(c.ravHirsch),
+    }));
+
+    const combinedCommentaries = {
+      rashi: [],
+      ramban: [],
+      haamekDavar: [],
+      ravHirsch: [],
+    };
+
+    let verseOffset = 0;
+    for (let a = 0; a < commentaries.length; a++) {
+      const c = flattenedCommentaries[a];
+      const verseCount = c.rashi.length;
+      for (let v = 0; v < verseCount; v++) {
+        combinedCommentaries.rashi.push(c.rashi[v] || []);
+        combinedCommentaries.ramban.push(c.ramban[v] || []);
+        combinedCommentaries.haamekDavar.push(c.haamekDavar[v] || []);
+        combinedCommentaries.ravHirsch.push(c.ravHirsch[v] || []);
+      }
+      verseOffset += verseCount;
+    }
+
+    console.log('Calling insights API...', { torahVerses: torahVerses.length });
+    const res = await fetch('/api/insights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ref: aliyahRefs.join(', '),
+        torahVerses,
+        commentaries: combinedCommentaries,
+      }),
+    }).catch(err => {
+      console.error('Fetch error:', err);
+      throw err;
+    });
+    console.log('Insights fetch done', res.status);
+
+    if (!res.ok) return;
+    const data = await res.json();
+    console.log('Insights response:', data);
+    if (!data.insights) return;
+
+    const triplets = containerEl.querySelectorAll('.verse-triplet');
+    console.log('Triplets count:', triplets.length);
+    for (const [verseIdx, insights] of Object.entries(data.insights)) {
+      console.log('Processing verse', verseIdx, 'with', insights.length, 'insights');
+      const triplet = triplets[verseIdx];
+      console.log('Looking for verse', verseIdx, 'triplet found:', !!triplet);
+      if (!triplet || !insights || insights.length === 0) continue;
+
+      const insightsLayer = document.createElement('div');
+      insightsLayer.className = 'layer layer-insights';
+      console.log('Created insights layer for verse', verseIdx);
+
+      const label = document.createElement('span');
+      label.className = 'layer-label';
+      label.textContent = 'פנינים';
+      insightsLayer.appendChild(label);
+
+      for (const insight of insights) {
+        const entry = document.createElement('div');
+        entry.className = 'insight-entry';
+
+        const commentator = document.createElement('span');
+        commentator.className = 'insight-commentator';
+        commentator.textContent = insight.commentator + ':';
+
+        const text = document.createElement('span');
+        text.className = 'insight-text';
+        text.textContent = insight.insight;
+
+        entry.appendChild(commentator);
+        entry.appendChild(text);
+        insightsLayer.appendChild(entry);
+      }
+
+      console.log('Appending insights layer to triplet', verseIdx);
+      triplet.appendChild(insightsLayer);
+    }
+  } catch (err) {
+    console.error('Insights load error:', err);
+    const triplets = containerEl.querySelectorAll('.verse-triplet');
+    if (triplets.length > 0) {
+      const lastTriplet = triplets[triplets.length - 1];
+      const errorLayer = document.createElement('div');
+      errorLayer.className = 'layer layer-insights';
+
+      const label = document.createElement('span');
+      label.className = 'layer-label';
+      label.textContent = 'פנינים';
+      errorLayer.appendChild(label);
+
+      const entry = document.createElement('div');
+      entry.className = 'insight-entry';
+      entry.style.color = '#c53030';
+      entry.style.borderColor = '#c53030';
+      entry.textContent = 'שגיאה בתהוענת הפניניםים';
+      errorLayer.appendChild(entry);
+
+      lastTriplet.appendChild(errorLayer);
+    }
   }
 }
 
