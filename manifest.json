@@ -1,0 +1,12 @@
+{
+  "name": "Mikra - מקרא",
+  "short_name": "Mikra",
+  "description": "Daily Torah Reading with Mikra, Steinsaltz, and Onkelos",
+  "dir": "rtl",
+  "lang": "he",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf9f6",
+  "theme_color": "#faf9f6",
+  "icons": []
+}

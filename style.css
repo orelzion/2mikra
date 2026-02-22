@@ -1,0 +1,227 @@
+:root {
+  --font-size: 20;
+  --font-family: 'Frank Ruhl Libre', Georgia, serif;
+  --color-mikra: #1a1a1a;
+  --color-steinsaltz: #333333;
+  --color-onkelos: #666666;
+  --bg-verse-group: #f8f7f4;
+  --bg-header: #ffffff;
+  --border-color: #e0ddd8;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  direction: rtl;
+  lang: he;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) * 1px);
+  line-height: 1.6;
+  color: var(--color-mikra);
+  background-color: #faf9f6;
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  background-color: var(--bg-header);
+  border-bottom: 1px solid var(--border-color);
+  padding: 16px 24px;
+  padding-inline-start: max(16px, env(safe-area-inset-start));
+  padding-inline-end: max(16px, env(safe-area-inset-end));
+  z-index: 100;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.header-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parasha-name {
+  font-weight: 700;
+  font-size: calc(var(--font-size) * 1.25px);
+  margin: 0;
+}
+
+.aliyah-name {
+  font-weight: 400;
+  font-size: calc(var(--font-size) * 0.875px);
+  color: var(--color-onkelos);
+  margin: 0;
+}
+
+.font-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.font-slider {
+  width: 120px;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border-color);
+  border-radius: 3px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.font-slider:focus-visible {
+  outline: 2px solid var(--color-mikra);
+  outline-offset: 2px;
+}
+
+.font-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--color-mikra);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.font-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--color-mikra);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.font-label {
+  font-size: calc(var(--font-size) * 0.75px);
+  color: var(--color-onkelos);
+  min-width: 32px;
+  text-align: center;
+}
+
+.content-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.verse-group {
+  margin-bottom: 32px;
+}
+
+.verse-triplet {
+  background-color: var(--bg-verse-group);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.layer {
+  padding: 14px 20px;
+}
+
+.layer + .layer {
+  border-top: 1px solid var(--border-color);
+}
+
+.layer-mikra {
+  font-weight: 700;
+  font-size: calc(var(--font-size) * 1.1px);
+  background-color: #ffffff;
+}
+
+.layer-steinsaltz {
+  font-weight: 400;
+  color: var(--color-steinsaltz);
+}
+
+.layer-steinsaltz b {
+  font-weight: 700;
+}
+
+.layer-onkelos {
+  font-weight: 400;
+  color: var(--color-mikra);
+}
+
+.verse {
+  margin: 0 0 0.4em;
+  line-height: 1.8;
+}
+
+.verse:last-child {
+  margin-bottom: 0;
+}
+
+.layer-label {
+  display: inline-block;
+  font-size: calc(var(--font-size) * 0.65px);
+  font-weight: 700;
+  color: var(--color-onkelos);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  opacity: 0.7;
+}
+
+.loading {
+  text-align: center;
+  padding: 48px;
+  color: var(--color-onkelos);
+}
+
+.error {
+  text-align: center;
+  padding: 48px;
+  color: #c53030;
+}
+
+.shabbat-message {
+  text-align: center;
+  padding: 64px 24px;
+  font-size: calc(var(--font-size) * 1.5px);
+  font-weight: 700;
+  color: var(--color-mikra);
+}
+
+/* Mobile-first: default is compact, desktop gets more room */
+@media (max-width: 599px) {
+  .header {
+    padding: 10px 16px;
+    padding-inline-start: max(10px, env(safe-area-inset-start));
+    padding-inline-end: max(10px, env(safe-area-inset-end));
+  }
+  
+  .content-container {
+    padding: 12px;
+  }
+  
+  .layer {
+    padding: 10px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
