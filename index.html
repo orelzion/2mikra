@@ -5,25 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://www.sefaria.org; img-src 'self' data:;">
   <meta name="description" content="Mikra - Daily Torah Reading with Mikra, Steinsaltz, and Onkelos">
-  <meta name="theme-color" content="#faf9f6">
+  <meta name="theme-color" content="#fdfbf7">
   <title>Mikra - מקרא</title>
   <link rel="manifest" href="manifest.json">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Hebrew:wght@400;700&family=Noto+Rashi+Hebrew&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <script src="purify.min.js"></script>
 </head>
 <body>
   <header class="header">
-    <div class="header-info">
-      <h1 class="parasha-name" id="parasha-name">טוען...</h1>
+    <div class="header-rule"></div>
+    <div class="header-titles">
       <p class="aliyah-name" id="aliyah-name"></p>
+      <h1 class="parasha-name" id="parasha-name">טוען...</h1>
     </div>
-    <div class="font-controls">
-      <span class="font-label" id="font-label">20</span>
-      <input type="range" id="font-slider" class="font-slider" min="14" max="32" step="1" value="20" aria-label="גודל גופן">
-    </div>
+    <div class="header-rule"></div>
   </header>
   
   <main class="content-container" id="content-container">

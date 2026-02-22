@@ -20,7 +20,6 @@ function sanitize(html) {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'mikra-font-size';
 const BASE_URL = 'https://www.sefaria.org';
 
 // ─── Date / Aliyah Logic ─────────────────────────────────────────────────────
@@ -57,29 +56,7 @@ const DAY_TO_ALIYAH = {
 // ─── Font Size ────────────────────────────────────────────────────────────────
 
 function initFontSize() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  let size = raw ? parseFloat(raw) : 20;
-  size = Math.max(14, Math.min(32, isFinite(size) ? size : 20));
-  applyFontSize(size);
-}
-
-function applyFontSize(size) {
-  document.documentElement.style.setProperty('--font-size', size);
-  const slider = document.getElementById('font-slider');
-  const label  = document.getElementById('font-label');
-  if (slider) slider.value = size;
-  if (label)  label.textContent = size;
-}
-
-function setupFontSlider() {
-  const slider = document.getElementById('font-slider');
-  if (!slider) return;
-  slider.addEventListener('input', () => {
-    let size = parseFloat(slider.value);
-    size = Math.max(14, Math.min(32, isFinite(size) ? size : 20));
-    applyFontSize(size);
-    localStorage.setItem(STORAGE_KEY, size);
-  });
+  document.documentElement.style.setProperty('--font-size', 20);
 }
 
 // ─── Ref Format Conversion ───────────────────────────────────────────────────
@@ -306,12 +283,10 @@ function buildVerseGroupEl(texts) {
     if (steinsaltzVerses[i] !== undefined) {
       const layer = document.createElement('div');
       layer.className = 'layer layer-steinsaltz';
-      if (i === 0) {
-        const lbl = document.createElement('span');
-        lbl.className = 'layer-label';
-        lbl.textContent = 'שטיינזלץ';
-        layer.appendChild(lbl);
-      }
+      const lbl = document.createElement('span');
+      lbl.className = 'section-label';
+      lbl.textContent = 'ביאור שטיינזלץ:';
+      layer.appendChild(lbl);
       const p = document.createElement('p');
       p.className = 'verse';
       p.innerHTML = sanitize(steinsaltzVerses[i]);
@@ -323,12 +298,10 @@ function buildVerseGroupEl(texts) {
     if (onkelosVerses[i] !== undefined) {
       const layer = document.createElement('div');
       layer.className = 'layer layer-onkelos';
-      if (i === 0) {
-        const lbl = document.createElement('span');
-        lbl.className = 'layer-label';
-        lbl.textContent = 'אונקלוס';
-        layer.appendChild(lbl);
-      }
+      const lbl = document.createElement('span');
+      lbl.className = 'section-label';
+      lbl.textContent = 'תרגום אונקלוס:';
+      layer.appendChild(lbl);
       const p = document.createElement('p');
       p.className = 'verse';
       p.innerHTML = sanitize(onkelosVerses[i]);
@@ -479,30 +452,34 @@ async function loadInsights(aliyahRefs, containerEl) {
       if (!triplet || !insights || insights.length === 0) continue;
 
       const insightsLayer = document.createElement('div');
-      insightsLayer.className = 'layer layer-insights';
+      insightsLayer.className = 'mefarshim-container';
       console.log('Created insights layer for verse', verseIdx);
 
       const label = document.createElement('span');
-      label.className = 'layer-label';
-      label.textContent = 'פנינים';
+      label.className = 'section-label';
+      label.textContent = 'פנינים:';
       insightsLayer.appendChild(label);
 
-      for (const insight of insights) {
-        const entry = document.createElement('div');
-        entry.className = 'insight-entry';
+      const grid = document.createElement('div');
+      grid.className = 'mefarshim-grid';
 
-        const commentator = document.createElement('span');
-        commentator.className = 'insight-commentator';
-        commentator.textContent = insight.commentator + ':';
+      for (const insight of insights) {
+        const item = document.createElement('div');
+        item.className = 'mefaresh-item';
+
+        const dibur = document.createElement('span');
+        dibur.className = 'dibur-hamatchil';
+        dibur.textContent = insight.commentator + ':';
 
         const text = document.createElement('span');
-        text.className = 'insight-text';
         text.textContent = insight.insight;
 
-        entry.appendChild(commentator);
-        entry.appendChild(text);
-        insightsLayer.appendChild(entry);
+        item.appendChild(dibur);
+        item.appendChild(text);
+        grid.appendChild(item);
       }
+
+      insightsLayer.appendChild(grid);
 
       console.log('Appending insights layer to triplet', verseIdx);
       triplet.appendChild(insightsLayer);
@@ -513,18 +490,17 @@ async function loadInsights(aliyahRefs, containerEl) {
     if (triplets.length > 0) {
       const lastTriplet = triplets[triplets.length - 1];
       const errorLayer = document.createElement('div');
-      errorLayer.className = 'layer layer-insights';
+      errorLayer.className = 'mefarshim-container';
 
       const label = document.createElement('span');
-      label.className = 'layer-label';
-      label.textContent = 'פנינים';
+      label.className = 'section-label';
+      label.textContent = 'פנינים:';
       errorLayer.appendChild(label);
 
       const entry = document.createElement('div');
-      entry.className = 'insight-entry';
       entry.style.color = '#c53030';
-      entry.style.borderColor = '#c53030';
-      entry.textContent = 'שגיאה בתהוענת הפניניםים';
+      entry.style.fontFamily = 'var(--font-rashi)';
+      entry.textContent = 'שגיאה בטעינת הפנינים';
       errorLayer.appendChild(entry);
 
       lastTriplet.appendChild(errorLayer);
@@ -545,6 +521,5 @@ if ('serviceWorker' in navigator) {
 
 document.addEventListener('DOMContentLoaded', () => {
   initFontSize();
-  setupFontSlider();
   render();
 });
