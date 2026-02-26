@@ -1,7 +1,7 @@
 // Vercel Cron Job: runs daily at 4am UTC (= 6am Jerusalem Standard Time).
-// Fetches today's aliyah, generates insights via Gemini, saves to Vercel KV.
+// Fetches today's aliyah, generates insights via Gemini, saves to Vercel Blob.
 
-import { kv } from '@vercel/kv';
+import { put } from '@vercel/blob';
 
 export const config = {
   maxDuration: 300,
@@ -248,8 +248,12 @@ export default async function handler(req) {
   // Generate insights via Gemini
   const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, combined);
 
-  // Save to Vercel KV — expire after 8 days to clean up automatically
-  await kv.set(`insights:${dateKey}`, insights, { ex: 8 * 24 * 60 * 60 });
+  // Save to Vercel Blob — overwrites same pathname each time (no suffix)
+  await put(`insights/${dateKey}.json`, JSON.stringify(insights), {
+    access: 'public',
+    addRandomSuffix: false,
+    contentType: 'application/json',
+  });
 
   return Response.json({ success: true, date: dateKey, refs: aliyahRefs });
 }

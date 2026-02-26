@@ -1,7 +1,7 @@
 // GET /api/daily-insights
-// Returns the pre-generated insights for today (Jerusalem date) from Vercel KV.
+// Returns the pre-generated insights for today (Jerusalem date) from Vercel Blob.
 
-import { kv } from '@vercel/kv';
+import { list } from '@vercel/blob';
 
 export const config = {
   runtime: 'edge',
@@ -29,16 +29,19 @@ export default async function handler(req) {
     timeZone: 'Asia/Jerusalem',
   }).format(new Date()); // "YYYY-MM-DD"
 
-  const insights = await kv.get(`insights:${dateKey}`);
+  const { blobs } = await list({ prefix: `insights/${dateKey}.json` });
 
-  if (!insights) {
+  if (!blobs.length) {
     return new Response(JSON.stringify({ insights: {} }), {
       status: 200,
       headers: corsHeaders,
     });
   }
 
-  return new Response(JSON.stringify(insights), {
+  const blobRes = await fetch(blobs[0].url);
+  const text = await blobRes.text();
+
+  return new Response(text, {
     status: 200,
     headers: corsHeaders,
   });
