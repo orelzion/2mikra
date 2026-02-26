@@ -5,7 +5,6 @@ import { list } from '@vercel/blob';
 import { put } from '@vercel/blob';
 
 export const config = {
-  runtime: 'edge',
   maxDuration: 60,
 };
 
@@ -90,12 +89,12 @@ async function generateInsights(ref, torahVerses, commentaries) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers['authorization'];
     if (auth !== `Bearer ${cronSecret}`) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
   }
 
@@ -109,7 +108,7 @@ export default async function handler(req) {
 
   if (dayOfWeek === 6) {
     console.log(`[generate-daily-insights] Shabbat — skipping`);
-    return Response.json({ message: 'Shabbat — skipped', date: dateKey });
+    return res.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
   // Read texts saved by fetch-daily-texts
@@ -117,14 +116,14 @@ export default async function handler(req) {
   const { blobs } = await list({ prefix: `texts/${dateKey}.json` });
   if (blobs.length === 0) {
     console.error(`[generate-daily-insights] texts blob not found for ${dateKey}`);
-    return Response.json({ error: `texts/${dateKey}.json not found in Blob — run fetch-daily-texts first` }, { status: 404 });
+    return res.status(404).json({ error: `texts/${dateKey}.json not found in Blob — run fetch-daily-texts first` });
   }
 
   const t1 = Date.now();
   const textsRes = await fetch(blobs[0].url);
   if (!textsRes.ok) {
     console.error(`[generate-daily-insights] failed to read texts blob — HTTP ${textsRes.status}`);
-    return Response.json({ error: 'Failed to read texts blob' }, { status: 502 });
+    return res.status(502).json({ error: 'Failed to read texts blob' });
   }
   const { refs, torahVerses, commentaries } = await textsRes.json();
   console.log(`[generate-daily-insights] texts blob read (${Date.now() - t1}ms) — ${torahVerses.length} verses, refs=${refs.join(', ')}`);
@@ -141,5 +140,5 @@ export default async function handler(req) {
   });
   console.log(`[generate-daily-insights] blob saved (${Date.now() - t2}ms) — total=${Date.now() - start}ms`);
 
-  return Response.json({ success: true, date: dateKey, refs });
+  return res.json({ success: true, date: dateKey, refs });
 }

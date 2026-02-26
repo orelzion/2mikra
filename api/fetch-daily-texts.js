@@ -4,7 +4,6 @@
 import { put } from '@vercel/blob';
 
 export const config = {
-  runtime: 'edge',
   maxDuration: 60,
 };
 
@@ -129,12 +128,12 @@ async function fetchCommentaries(ref) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers['authorization'];
     if (auth !== `Bearer ${cronSecret}`) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      return res.status(401).json({ error: 'Unauthorized' });
     }
   }
 
@@ -148,7 +147,7 @@ export default async function handler(req) {
 
   if (dayOfWeek === 6) {
     console.log(`[fetch-daily-texts] Shabbat — skipping`);
-    return Response.json({ message: 'Shabbat — skipped', date: dateKey });
+    return res.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
   // Fetch current parasha from Sefaria
@@ -157,7 +156,7 @@ export default async function handler(req) {
   const calRes = await fetch(`${BASE_URL}/api/calendars`);
   if (!calRes.ok) {
     console.error(`[fetch-daily-texts] calendar fetch failed — HTTP ${calRes.status}`);
-    return Response.json({ error: 'Sefaria calendar fetch failed' }, { status: 502 });
+    return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
   }
   const calendar = await calRes.json();
   console.log(`[fetch-daily-texts] calendar fetched (${Date.now() - t1}ms)`);
@@ -165,7 +164,7 @@ export default async function handler(req) {
   const parashat = (calendar.calendar_items || []).find(i => i.title?.en === 'Parashat Hashavua');
   if (!parashat) {
     console.error(`[fetch-daily-texts] Parashat Hashavua not found in calendar`);
-    return Response.json({ error: 'Parashat Hashavua not found in calendar' }, { status: 404 });
+    return res.status(404).json({ error: 'Parashat Hashavua not found in calendar' });
   }
 
   const aliyot     = parashat.extraDetails?.aliyot || [];
@@ -177,7 +176,7 @@ export default async function handler(req) {
 
   if (aliyahRefs.length === 0) {
     console.error(`[fetch-daily-texts] no aliyah refs found — dayOfWeek=${dayOfWeek} aliyot=${JSON.stringify(aliyot)}`);
-    return Response.json({ error: 'No aliyah refs found', dayOfWeek, aliyot }, { status: 404 });
+    return res.status(404).json({ error: 'No aliyah refs found', dayOfWeek, aliyot });
   }
 
   // Fetch mikra texts + commentaries in parallel
@@ -219,5 +218,5 @@ export default async function handler(req) {
   });
   console.log(`[fetch-daily-texts] blob saved (${Date.now() - t3}ms) — total=${Date.now() - start}ms`);
 
-  return Response.json({ success: true, date: dateKey, refs: aliyahRefs });
+  return res.json({ success: true, date: dateKey, refs: aliyahRefs });
 }
