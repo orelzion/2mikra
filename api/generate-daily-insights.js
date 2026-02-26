@@ -49,7 +49,8 @@ function convertRefFormat(ref) {
 
 async function fetchText(ref) {
   try {
-    const res = await fetch(`${BASE_URL}/api/v3/texts/${encodeURIComponent(ref)}`);
+    const signal = AbortSignal.timeout(15000);
+    const res = await fetch(`${BASE_URL}/api/v3/texts/${encodeURIComponent(ref)}`, { signal });
     if (!res.ok) return null;
     return res.json();
   } catch {
