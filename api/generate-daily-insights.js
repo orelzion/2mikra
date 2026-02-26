@@ -5,6 +5,7 @@ import { list } from '@vercel/blob';
 import { put } from '@vercel/blob';
 
 export const config = {
+  runtime: 'edge',
   maxDuration: 60,
 };
 
