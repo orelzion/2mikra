@@ -47,12 +47,19 @@ function convertRefFormat(ref) {
 }
 
 async function fetchText(ref) {
+  const t = Date.now();
   try {
     const signal = AbortSignal.timeout(15000);
     const res = await fetch(`${BASE_URL}/api/v3/texts/${encodeURIComponent(ref)}`, { signal });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
+    if (!res.ok) {
+      console.warn(`[fetch-daily-texts] fetchText ${ref} — HTTP ${res.status} (${Date.now() - t}ms)`);
+      return null;
+    }
+    const data = await res.json();
+    console.log(`[fetch-daily-texts] fetchText ${ref} — OK (${Date.now() - t}ms)`);
+    return data;
+  } catch (err) {
+    console.error(`[fetch-daily-texts] fetchText ${ref} — ERROR after ${Date.now() - t}ms:`, err.message);
     return null;
   }
 }
@@ -130,23 +137,33 @@ export default async function handler(req) {
     }
   }
 
+  const start = Date.now();
   const { weekday, year, month, day } = getJerusalemParts();
   const dateKey  = `${year}-${month}-${day}`;
   const dayMap   = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
   const dayOfWeek = dayMap[weekday];
 
+  console.log(`[fetch-daily-texts] start — date=${dateKey} weekday=${weekday}`);
+
   if (dayOfWeek === 6) {
+    console.log(`[fetch-daily-texts] Shabbat — skipping`);
     return Response.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
   // Fetch current parasha from Sefaria
+  console.log(`[fetch-daily-texts] fetching Sefaria calendar...`);
+  const t1 = Date.now();
   const calRes = await fetch(`${BASE_URL}/api/calendars`);
   if (!calRes.ok) {
+    console.error(`[fetch-daily-texts] calendar fetch failed — HTTP ${calRes.status}`);
     return Response.json({ error: 'Sefaria calendar fetch failed' }, { status: 502 });
   }
   const calendar = await calRes.json();
+  console.log(`[fetch-daily-texts] calendar fetched (${Date.now() - t1}ms)`);
+
   const parashat = (calendar.calendar_items || []).find(i => i.title?.en === 'Parashat Hashavua');
   if (!parashat) {
+    console.error(`[fetch-daily-texts] Parashat Hashavua not found in calendar`);
     return Response.json({ error: 'Parashat Hashavua not found in calendar' }, { status: 404 });
   }
 
@@ -155,17 +172,24 @@ export default async function handler(req) {
   const indices     = Array.isArray(aliyahIndex) ? aliyahIndex : [aliyahIndex];
   const aliyahRefs  = indices.map(i => aliyot[i]).filter(Boolean);
 
+  console.log(`[fetch-daily-texts] parasha=${parashat.displayValue?.en} refs=${aliyahRefs.join(', ')}`);
+
   if (aliyahRefs.length === 0) {
+    console.error(`[fetch-daily-texts] no aliyah refs found — dayOfWeek=${dayOfWeek} aliyot=${JSON.stringify(aliyot)}`);
     return Response.json({ error: 'No aliyah refs found', dayOfWeek, aliyot }, { status: 404 });
   }
 
   // Fetch mikra texts + commentaries in parallel
+  console.log(`[fetch-daily-texts] fetching mikra + commentaries in parallel...`);
+  const t2 = Date.now();
   const [mikraArrays, commentariesArray] = await Promise.all([
     Promise.all(aliyahRefs.map(fetchAliyahTexts)),
     Promise.all(aliyahRefs.map(fetchCommentaries)),
   ]);
+  console.log(`[fetch-daily-texts] all Sefaria fetches done (${Date.now() - t2}ms)`);
 
   const torahVerses = mikraArrays.flat();
+  console.log(`[fetch-daily-texts] torahVerses=${torahVerses.length} verses`);
 
   const flatCommentaries = commentariesArray.map(c => ({
     rashi:       flattenCommentaryVerses(c.rashi),
@@ -185,11 +209,14 @@ export default async function handler(req) {
     }
   }
 
+  console.log(`[fetch-daily-texts] saving texts blob...`);
+  const t3 = Date.now();
   await put(`texts/${dateKey}.json`, JSON.stringify({ refs: aliyahRefs, torahVerses, commentaries: combined }), {
     access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
   });
+  console.log(`[fetch-daily-texts] blob saved (${Date.now() - t3}ms) — total=${Date.now() - start}ms`);
 
   return Response.json({ success: true, date: dateKey, refs: aliyahRefs });
 }
