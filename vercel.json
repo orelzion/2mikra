@@ -1,8 +1,12 @@
 {
   "crons": [
     {
-      "path": "/api/generate-daily-insights",
+      "path": "/api/fetch-daily-texts",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/generate-daily-insights",
+      "schedule": "10 4 * * *"
     }
   ]
 }
