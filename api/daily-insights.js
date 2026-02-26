@@ -3,10 +3,6 @@
 
 import { list } from '@vercel/blob';
 
-export const config = {
-  runtime: 'edge',
-};
-
 export default async function handler(req) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
