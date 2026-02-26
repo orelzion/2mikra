@@ -3,21 +3,13 @@
 
 import { list } from '@vercel/blob';
 
-export default async function handler(req) {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Content-Type': 'application/json',
-  };
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      },
-    });
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
   }
 
   // Get today's date in Jerusalem timezone
@@ -28,17 +20,12 @@ export default async function handler(req) {
   const { blobs } = await list({ prefix: `insights/${dateKey}.json` });
 
   if (!blobs.length) {
-    return new Response(JSON.stringify({ insights: {} }), {
-      status: 200,
-      headers: corsHeaders,
-    });
+    return res.status(200).json({ insights: {} });
   }
 
   const blobRes = await fetch(blobs[0].url);
   const text = await blobRes.text();
 
-  return new Response(text, {
-    status: 200,
-    headers: corsHeaders,
-  });
+  res.setHeader('Content-Type', 'application/json');
+  return res.status(200).send(text);
 }
