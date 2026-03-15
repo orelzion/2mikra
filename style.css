@@ -98,6 +98,14 @@ body {
 }
 
 .header.is-collapsed .parasha-name {
+  order: 0;
+}
+
+.header.is-collapsed .aliyah-name {
+  order: 1;
+}
+
+.header.is-collapsed .parasha-name {
   font-size: calc(var(--font-size) * 0.9px);
 }
 
