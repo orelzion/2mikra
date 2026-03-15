@@ -95,7 +95,7 @@ async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 150
     const start = Date.now();
     try {
       const signal = AbortSignal.timeout(timeoutMs);
-      const res = await fetch(url, { signal, cache: 'no-store' });
+      const res = await fetch(url, { signal });
 
       if (res.ok) {
         return await res.json();
