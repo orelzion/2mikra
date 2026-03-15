@@ -15,9 +15,22 @@ const DAY_TO_ALIYAH = {
   2: 2,       // Tuesday   → 3rd aliyah
   3: 3,       // Wednesday → 4th aliyah
   4: 4,       // Thursday  → 5th aliyah
-  5: [5, 6],  // Friday    → 6th & 7th aliyot
+  5: [5, 6],  // Friday    → 6th & 7th aliyot (+ Maftir when present)
   6: null,    // Saturday  → Shabbat, skip
 };
+
+
+
+function getAliyahRefsForDay(dayOfWeek, aliyot) {
+  const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
+  const indices = Array.isArray(aliyahIndex) ? [...aliyahIndex] : [aliyahIndex];
+
+  if (dayOfWeek === 5 && aliyot?.[7]) {
+    indices.push(7);
+  }
+
+  return indices.map(i => aliyot[i]).filter(Boolean);
+}
 
 // ─── Jerusalem date helpers ───────────────────────────────────────────────────
 
@@ -167,10 +180,8 @@ export default async function handler(req, res) {
     return res.status(404).json({ error: 'Parashat Hashavua not found in calendar' });
   }
 
-  const aliyot     = parashat.extraDetails?.aliyot || [];
-  const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
-  const indices     = Array.isArray(aliyahIndex) ? aliyahIndex : [aliyahIndex];
-  const aliyahRefs  = indices.map(i => aliyot[i]).filter(Boolean);
+  const aliyot    = parashat.extraDetails?.aliyot || [];
+  const aliyahRefs = getAliyahRefsForDay(dayOfWeek, aliyot);
 
   console.log(`[fetch-daily-texts] parasha=${parashat.displayValue?.en} refs=${aliyahRefs.join(', ')}`);
 

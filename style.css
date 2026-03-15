@@ -132,6 +132,29 @@ body {
   margin-bottom: 0;
 }
 
+
+.aliyah-section-separator {
+  margin: 16px 0 14px;
+  text-align: center;
+}
+
+.aliyah-section-title {
+  margin: 0;
+  font-family: var(--font-rashi);
+  font-size: calc(var(--font-size) * 0.72px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #6f6658;
+}
+
+.aliyah-section-separator::after {
+  content: '';
+  display: block;
+  margin: 8px auto 0;
+  width: min(220px, 45%);
+  border-bottom: 1px solid #d8d0c3;
+}
+
 /* Each verse unit — separated by double border, no card */
 .verse-triplet {
   margin-bottom: 0;
