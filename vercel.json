@@ -1,4 +1,7 @@
 {
+  "installCommand": "echo 'no install needed'",
+  "buildCommand": "echo 'no build needed'",
+  "outputDirectory": ".",
   "crons": [
     {
       "path": "/api/fetch-daily-texts",
@@ -11,7 +14,11 @@
   ],
   "rewrites": [
     {
-      "source": "/",
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
