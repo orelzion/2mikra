@@ -217,6 +217,14 @@ body {
 .verse {
   margin: 0 0 0.4em;
   line-height: 1.8;
+}
+
+.layer-mikra .verse {
+  font-family: var(--font-mikra);
+}
+
+.layer-steinsaltz .verse,
+.layer-onkelos .verse {
   font-family: var(--font-verse);
 }
 
