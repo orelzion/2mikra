@@ -8,5 +8,11 @@
       "path": "/api/generate-daily-insights",
       "schedule": "10 4 * * *"
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
   ]
 }
