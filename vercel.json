@@ -1,4 +1,5 @@
 {
+  "outputDirectory": ".",
   "crons": [
     {
       "path": "/api/fetch-daily-texts",
@@ -7,6 +8,16 @@
     {
       "path": "/api/generate-daily-insights",
       "schedule": "10 4 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

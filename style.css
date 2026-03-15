@@ -2,7 +2,7 @@
   --font-size: 20;
   --font-mikra: 'Noto Serif Hebrew', Georgia, serif;
   --font-rashi: 'Noto Rashi Hebrew', serif;
-  --font-verse: 'Shofar', 'Noto Serif Hebrew', Georgia, serif;
+  --font-verse: 'Heebo', 'Noto Serif Hebrew', sans-serif;
   --color-mikra: #1a1a1a;
   --color-steinsaltz: #333333;
   --color-onkelos: #666666;
@@ -11,21 +11,6 @@
   --border-color: #dcd6cc;
 }
 
-@font-face {
-  font-family: 'Shofar';
-  src: url('/fonts/Shofar/TTF/ShofarRegular.ttf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Shofar';
-  src: url('/fonts/Shofar/TTF/ShofarDemi-Bold.ttf') format('truetype');
-  font-weight: bold;
-  font-style: normal;
-  font-display: swap;
-}
 
 * {
   box-sizing: border-box;
@@ -232,6 +217,14 @@ body {
 .verse {
   margin: 0 0 0.4em;
   line-height: 1.8;
+}
+
+.layer-mikra .verse {
+  font-family: var(--font-mikra);
+}
+
+.layer-steinsaltz .verse,
+.layer-onkelos .verse {
   font-family: var(--font-verse);
 }
 
