@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mikra-v1';
+const CACHE_NAME = 'mikra-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -33,6 +33,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
+
+  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
+    event.respondWith(networkOnly(request));
+    return;
+  }
 
   if (url.origin === 'https://www.sefaria.org') {
     event.respondWith(networkFirstWithCacheFallback(request));
@@ -74,5 +79,13 @@ async function networkFirstWithCacheFallback(request) {
       return cached;
     }
     return new Response('Offline - no cached data available', { status: 503 });
+  }
+}
+
+async function networkOnly(request) {
+  try {
+    return await fetch(request, { cache: 'no-store' });
+  } catch (error) {
+    return new Response('Network error', { status: 503 });
   }
 }
