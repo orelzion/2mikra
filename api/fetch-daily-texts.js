@@ -199,15 +199,18 @@ export default async function handler(req, res) {
   }));
 
   const combined = { rashi: [], ramban: [], haamekDavar: [], ravHirsch: [] };
-  for (const c of flatCommentaries) {
-    const verseCount = c.rashi.length;
+  mikraArrays.forEach((mikraVerses, aliyahPos) => {
+    const c = flatCommentaries[aliyahPos] || {};
+    const verseCount = mikraVerses.length;
     for (let v = 0; v < verseCount; v++) {
-      combined.rashi.push(c.rashi[v] || []);
-      combined.ramban.push(c.ramban[v] || []);
-      combined.haamekDavar.push(c.haamekDavar[v] || []);
-      combined.ravHirsch.push(c.ravHirsch[v] || []);
+      combined.rashi.push(c.rashi?.[v] || []);
+      combined.ramban.push(c.ramban?.[v] || []);
+      combined.haamekDavar.push(c.haamekDavar?.[v] || []);
+      combined.ravHirsch.push(c.ravHirsch?.[v] || []);
     }
-  }
+  });
+
+  console.log(`[fetch-daily-texts] aligned commentary arrays to torah verses (${torahVerses.length} entries)`);
 
   console.log(`[fetch-daily-texts] saving texts blob...`);
   const t3 = Date.now();

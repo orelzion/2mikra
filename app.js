@@ -40,6 +40,12 @@ function getJerusalemDayOfWeek() {
   return map[weekday];
 }
 
+function getJerusalemDateKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem',
+  }).format(new Date());
+}
+
 // Maps Jerusalem weekday → aliyah array index/indices.
 // Friday returns [5, 6] (6th & 7th aliyot, Maftir excluded).
 // Saturday returns null (Shabbat rest screen).
@@ -313,7 +319,10 @@ async function render() {
       containerEl.appendChild(groupEl);
     });
 
-    loadPreGeneratedInsights(containerEl);
+    const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true });
+    if (insightsStatus.status === 'error') {
+      console.warn('[insights] unavailable:', insightsStatus.reason || 'unknown');
+    }
 
   } catch (err) {
     containerEl.innerHTML = '';
@@ -324,17 +333,48 @@ async function render() {
   }
 }
 
-async function loadPreGeneratedInsights(containerEl) {
+function renderInsightsFallbackMessage(containerEl, message) {
+  const fallback = document.createElement('div');
+  fallback.className = 'insights-fallback';
+  fallback.textContent = message;
+  containerEl.appendChild(fallback);
+}
+
+/**
+ * Load and render pre-generated insights.
+ * @returns {{status: 'loaded'|'empty'|'error', reason?: string, renderedCount?: number}}
+ */
+async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = false } = {}) {
   try {
-    const res = await fetch('/api/daily-insights');
-    if (!res.ok) return;
+    const dateKey = getJerusalemDateKey();
+    const res = await fetch(`/api/daily-insights?date=${encodeURIComponent(dateKey)}`, { cache: 'no-store' });
+    if (!res.ok) {
+      if (showFallbackMessage) {
+        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+      }
+      return { status: 'error', reason: `HTTP ${res.status}` };
+    }
+
     const data = await res.json();
-    if (!data.insights) return;
+    if (!data.insights || Object.keys(data.insights).length === 0) {
+      if (showFallbackMessage) {
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.');
+      }
+      return { status: 'empty', reason: 'no insights' };
+    }
 
     const triplets = containerEl.querySelectorAll('.verse-triplet');
+    let renderedCount = 0;
+    let outOfBoundsInsights = false;
+
     for (const [verseIdx, insights] of Object.entries(data.insights)) {
-      const triplet = triplets[verseIdx];
-      if (!triplet || !insights || insights.length === 0) continue;
+      const parsedIdx = Number(verseIdx);
+      const triplet = Number.isInteger(parsedIdx) ? triplets[parsedIdx] : null;
+      if (!triplet) {
+        outOfBoundsInsights = true;
+        continue;
+      }
+      if (!insights || insights.length === 0) continue;
 
       const insightsLayer = document.createElement('div');
       insightsLayer.className = 'mefarshim-container';
@@ -365,9 +405,22 @@ async function loadPreGeneratedInsights(containerEl) {
 
       insightsLayer.appendChild(grid);
       triplet.appendChild(insightsLayer);
+      renderedCount += 1;
     }
+
+    if (renderedCount === 0) {
+      if (showFallbackMessage) {
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.');
+      }
+      return { status: 'empty', reason: outOfBoundsInsights ? 'index mismatch' : 'no rendered insights' };
+    }
+
+    return { status: 'loaded', renderedCount };
   } catch {
-    // Insights are a nice-to-have; fail silently
+    if (showFallbackMessage) {
+      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+    }
+    return { status: 'error', reason: 'fetch failed' };
   }
 }
 

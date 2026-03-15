@@ -1,7 +1,21 @@
 // GET /api/daily-insights
-// Returns the pre-generated insights for today (Jerusalem date) from Vercel Blob.
+// Returns the pre-generated insights for a date key (Jerusalem date by default) from Vercel Blob.
 
 import { list } from '@vercel/blob';
+
+function getJerusalemDateKey() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem',
+  }).format(new Date());
+}
+
+function resolveDateKey(req) {
+  const requestedDate = typeof req.query?.date === 'string' ? req.query.date : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    return requestedDate;
+  }
+  return getJerusalemDateKey();
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -12,20 +26,20 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  // Get today's date in Jerusalem timezone
-  const dateKey = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jerusalem',
-  }).format(new Date()); // "YYYY-MM-DD"
+  const dateKey = resolveDateKey(req);
+  const blobPath = `insights/${dateKey}.json`;
 
-  const { blobs } = await list({ prefix: `insights/${dateKey}.json` });
+  const { blobs } = await list({ prefix: blobPath });
+  const exactBlob = blobs.find((blob) => blob.pathname === blobPath);
 
-  if (!blobs.length) {
+  if (!exactBlob) {
     return res.status(200).json({ insights: {} });
   }
 
-  const blobRes = await fetch(blobs[0].url);
+  const blobRes = await fetch(exactBlob.url, { cache: 'no-store' });
   const text = await blobRes.text();
 
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.setHeader('Content-Type', 'application/json');
   return res.status(200).send(text);
 }
