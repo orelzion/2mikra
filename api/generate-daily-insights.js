@@ -87,6 +87,46 @@ async function generateInsights(ref, torahVerses, commentaries) {
   return JSON.parse(text);
 }
 
+async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 15000 } = {}) {
+  let lastStatus = 0;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const start = Date.now();
+    try {
+      const signal = AbortSignal.timeout(timeoutMs);
+      const res = await fetch(url, { signal, cache: 'no-store' });
+
+      if (res.ok) {
+        return await res.json();
+      }
+
+      lastStatus = res.status;
+      if (res.status >= 500 && attempt < attempts) {
+        const delayMs = 250 * attempt;
+        console.warn(`[generate-daily-insights] blob read attempt ${attempt}/${attempts} failed — HTTP ${res.status} (${Date.now() - start}ms), retrying in ${delayMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      return { __errorStatus: res.status };
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) {
+        const delayMs = 250 * attempt;
+        console.warn(`[generate-daily-insights] blob read attempt ${attempt}/${attempts} errored (${Date.now() - start}ms): ${err.message}; retrying in ${delayMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+  return { __errorStatus: lastStatus || 503 };
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -112,20 +152,31 @@ export default async function handler(req, res) {
   }
 
   // Read texts saved by fetch-daily-texts
-  console.log(`[generate-daily-insights] looking up texts/${dateKey}.json in Blob...`);
-  const { blobs } = await list({ prefix: `texts/${dateKey}.json` });
-  if (blobs.length === 0) {
+  const blobPath = `texts/${dateKey}.json`;
+  console.log(`[generate-daily-insights] looking up ${blobPath} in Blob...`);
+  const { blobs } = await list({ prefix: blobPath });
+  const exactBlob = blobs.find((blob) => blob.pathname === blobPath);
+
+  if (!exactBlob) {
     console.error(`[generate-daily-insights] texts blob not found for ${dateKey}`);
-    return res.status(404).json({ error: `texts/${dateKey}.json not found in Blob — run fetch-daily-texts first` });
+    return res.status(404).json({ error: `${blobPath} not found in Blob — run fetch-daily-texts first` });
   }
 
   const t1 = Date.now();
-  const textsRes = await fetch(blobs[0].url);
-  if (!textsRes.ok) {
-    console.error(`[generate-daily-insights] failed to read texts blob — HTTP ${textsRes.status}`);
-    return res.status(502).json({ error: 'Failed to read texts blob' });
+  let textsPayload;
+  try {
+    textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.url);
+  } catch (err) {
+    console.error(`[generate-daily-insights] failed to read texts blob — ERROR: ${err.message}`);
+    return res.status(502).json({ error: 'Failed to read texts blob', details: err.message });
   }
-  const { refs, torahVerses, commentaries } = await textsRes.json();
+
+  if (textsPayload.__errorStatus) {
+    console.error(`[generate-daily-insights] failed to read texts blob — HTTP ${textsPayload.__errorStatus}`);
+    return res.status(502).json({ error: 'Failed to read texts blob', blobStatus: textsPayload.__errorStatus });
+  }
+
+  const { refs, torahVerses, commentaries } = textsPayload;
   console.log(`[generate-daily-insights] texts blob read (${Date.now() - t1}ms) — ${torahVerses.length} verses, refs=${refs.join(', ')}`);
 
   // Generate insights via Gemini
