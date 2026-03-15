@@ -9,8 +9,19 @@ function getJerusalemDateKey() {
   }).format(new Date());
 }
 
+function getRequestedDateFromUrl(reqUrl) {
+  if (typeof reqUrl !== 'string' || reqUrl.length === 0) return '';
+
+  try {
+    const url = new URL(reqUrl, 'https://mikra.local');
+    return url.searchParams.get('date') || '';
+  } catch {
+    return '';
+  }
+}
+
 function resolveDateKey(req) {
-  const requestedDate = typeof req.query?.date === 'string' ? req.query.date : '';
+  const requestedDate = getRequestedDateFromUrl(req.url);
   if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
     return requestedDate;
   }
@@ -26,6 +37,11 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET, OPTIONS');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   const dateKey = resolveDateKey(req);
   const blobPath = `insights/${dateKey}.json`;
 
@@ -33,6 +49,7 @@ export default async function handler(req, res) {
   const exactBlob = blobs.find((blob) => blob.pathname === blobPath);
 
   if (!exactBlob) {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     return res.status(200).json({ insights: {} });
   }
 
