@@ -87,7 +87,7 @@ async function generateInsights(ref, torahVerses, commentaries) {
   return JSON.parse(text);
 }
 
-async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 15000 } = {}) {
+async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 15000, label = 'blob-url' } = {}) {
   let lastStatus = 0;
   let lastError = null;
 
@@ -104,7 +104,7 @@ async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 150
       lastStatus = res.status;
       if (res.status >= 500 && attempt < attempts) {
         const delayMs = 250 * attempt;
-        console.warn(`[generate-daily-insights] blob read attempt ${attempt}/${attempts} failed — HTTP ${res.status} (${Date.now() - start}ms), retrying in ${delayMs}ms`);
+        console.warn(`[generate-daily-insights] ${label} read attempt ${attempt}/${attempts} failed — HTTP ${res.status} (${Date.now() - start}ms), retrying in ${delayMs}ms`);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
@@ -114,7 +114,7 @@ async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 150
       lastError = err;
       if (attempt < attempts) {
         const delayMs = 250 * attempt;
-        console.warn(`[generate-daily-insights] blob read attempt ${attempt}/${attempts} errored (${Date.now() - start}ms): ${err.message}; retrying in ${delayMs}ms`);
+        console.warn(`[generate-daily-insights] ${label} read attempt ${attempt}/${attempts} errored (${Date.now() - start}ms): ${err.message}; retrying in ${delayMs}ms`);
         await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
@@ -164,16 +164,31 @@ export default async function handler(req, res) {
 
   const t1 = Date.now();
   let textsPayload;
+  let primaryStatus = 0;
+
   try {
-    textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.url);
+    textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.url, { label: 'blob.url' });
   } catch (err) {
-    console.error(`[generate-daily-insights] failed to read texts blob — ERROR: ${err.message}`);
-    return res.status(502).json({ error: 'Failed to read texts blob', details: err.message });
+    console.warn(`[generate-daily-insights] failed reading via blob.url — ${err.message}; trying downloadUrl`);
+  }
+
+  if (!textsPayload || textsPayload.__errorStatus) {
+    primaryStatus = textsPayload?.__errorStatus || 0;
+
+    try {
+      textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.downloadUrl, { label: 'blob.downloadUrl' });
+    } catch (err) {
+      console.error(`[generate-daily-insights] failed to read texts blob — ERROR: ${err.message}`);
+      return res.status(502).json({ error: 'Failed to read texts blob', details: err.message, primaryStatus });
+    }
   }
 
   if (textsPayload.__errorStatus) {
-    console.error(`[generate-daily-insights] failed to read texts blob — HTTP ${textsPayload.__errorStatus}`);
-    return res.status(502).json({ error: 'Failed to read texts blob', blobStatus: textsPayload.__errorStatus });
+    console.error(`[generate-daily-insights] failed to read texts blob — HTTP url=${primaryStatus || 'n/a'} downloadUrl=${textsPayload.__errorStatus}`);
+    return res.status(502).json({
+      error: 'Failed to read texts blob',
+      blobStatus: { url: primaryStatus || null, downloadUrl: textsPayload.__errorStatus },
+    });
   }
 
   const { refs, torahVerses, commentaries } = textsPayload;
