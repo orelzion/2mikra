@@ -383,6 +383,17 @@ if ('serviceWorker' in navigator) {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  const headerEl = document.querySelector('.header');
+  const collapseThreshold = 40;
+
+  const syncCollapsedHeader = () => {
+    if (!headerEl) return;
+    headerEl.classList.toggle('is-collapsed', window.scrollY > collapseThreshold);
+  };
+
+  window.addEventListener('scroll', syncCollapsedHeader, { passive: true });
+
   initFontSize();
+  syncCollapsedHeader();
   render();
 });

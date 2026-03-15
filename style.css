@@ -49,6 +49,7 @@ body {
   border-bottom: 3px double var(--border-color);
   padding: 24px 32px 20px;
   text-align: center;
+  transition: padding 0.25s ease;
 }
 
 .header-titles {
@@ -63,6 +64,7 @@ body {
   background: var(--border-color);
   margin: 10px auto;
   width: 60%;
+  transition: margin 0.25s ease;
 }
 
 .parasha-name {
@@ -71,6 +73,7 @@ body {
   font-size: calc(var(--font-size) * 1.6px);
   margin: 0;
   letter-spacing: 0.02em;
+  transition: font-size 0.25s ease;
 }
 
 .aliyah-name {
@@ -80,6 +83,23 @@ body {
   color: var(--color-onkelos);
   margin: 0;
   letter-spacing: 0.05em;
+  transition: font-size 0.25s ease;
+}
+
+.header.is-collapsed {
+  padding: 14px 32px 12px;
+}
+
+.header.is-collapsed .parasha-name {
+  font-size: calc(var(--font-size) * 1.35px);
+}
+
+.header.is-collapsed .aliyah-name {
+  font-size: calc(var(--font-size) * 0.75px);
+}
+
+.header.is-collapsed .header-rule {
+  margin: 6px auto;
 }
 
 /* The "daf" — the parchment page */
@@ -267,6 +287,22 @@ body {
 @media (max-width: 599px) {
   .header {
     padding: 16px 20px 14px;
+  }
+
+  .header.is-collapsed {
+    padding: 10px 20px 8px;
+  }
+
+  .header.is-collapsed .parasha-name {
+    font-size: calc(var(--font-size) * 1.25px);
+  }
+
+  .header.is-collapsed .aliyah-name {
+    font-size: calc(var(--font-size) * 0.7px);
+  }
+
+  .header.is-collapsed .header-rule {
+    margin: 4px auto;
   }
 
   .header-rule {
