@@ -47,7 +47,7 @@ function getJerusalemDateKey() {
 }
 
 // Maps Jerusalem weekday → aliyah array index/indices.
-// Friday returns [5, 6] (6th & 7th aliyot, Maftir excluded).
+// Friday base is [5, 6], with Maftir (7) appended when available in source aliyot.
 // Saturday returns null (Shabbat rest screen).
 const DAY_TO_ALIYAH = {
   0: 0,       // Sunday    → 1st aliyah
@@ -55,8 +55,19 @@ const DAY_TO_ALIYAH = {
   2: 2,       // Tuesday   → 3rd aliyah
   3: 3,       // Wednesday → 4th aliyah
   4: 4,       // Thursday  → 5th aliyah
-  5: [5, 6],  // Friday    → 6th & 7th aliyot
+  5: [5, 6],  // Friday    → 6th & 7th aliyot (+ Maftir when present)
   6: null,    // Saturday  → Shabbat screen
+};
+
+const ALIYAH_SECTION_META = {
+  0: { short: 'ראשון', full: 'עליית ראשון' },
+  1: { short: 'שני', full: 'עליית שני' },
+  2: { short: 'שלישי', full: 'עליית שלישי' },
+  3: { short: 'רביעי', full: 'עליית רביעי' },
+  4: { short: 'חמישי', full: 'עליית חמישי' },
+  5: { short: 'שישי', full: 'עליית שישי' },
+  6: { short: 'שביעי', full: 'עליית שביעי' },
+  7: { short: 'מפטיר', full: 'מפטיר' },
 };
 
 // ─── Font Size ────────────────────────────────────────────────────────────────
@@ -262,6 +273,36 @@ function buildVerseGroupEl(texts) {
   return group;
 }
 
+function createSectionSeparator(title) {
+  const separator = document.createElement('div');
+  separator.className = 'aliyah-section-separator';
+
+  const heading = document.createElement('h3');
+  heading.className = 'aliyah-section-title';
+  heading.textContent = title;
+
+  separator.appendChild(heading);
+  return separator;
+}
+
+function getAliyahSectionsForDay(dayOfWeek, aliyot) {
+  const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
+  const indices = Array.isArray(aliyahIndex) ? [...aliyahIndex] : [aliyahIndex];
+
+  if (dayOfWeek === 5 && aliyot?.[7]) {
+    indices.push(7);
+  }
+
+  return indices
+    .filter(index => aliyot?.[index])
+    .map(index => ({
+      index,
+      ref: aliyot[index],
+      shortLabel: ALIYAH_SECTION_META[index]?.short ?? 'עלייה',
+      sectionLabel: ALIYAH_SECTION_META[index]?.full ?? 'עלייה',
+    }));
+}
+
 
 // ─── Main Render ──────────────────────────────────────────────────────────────
 
@@ -299,21 +340,29 @@ async function render() {
 
     parashaNameEl.textContent = parashat.name;
 
-    const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
-    const indices = Array.isArray(aliyahIndex) ? aliyahIndex : [aliyahIndex];
+    const aliyahSections = getAliyahSectionsForDay(dayOfWeek, parashat.aliyot);
 
-    // Hebrew ordinal labels
-    const HEBREW_ORDINALS = ['ראשונה', 'שנייה', 'שלישית', 'רביעית', 'חמישית', 'שישית', 'שביעית'];
+    if (aliyahSections.length === 0) {
+      containerEl.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'error';
+      err.textContent = 'לא נמצאו עליות זמינות להיום';
+      containerEl.appendChild(err);
+      return;
+    }
+
+    aliyahNameEl.textContent = aliyahSections.map(section => section.shortLabel).join(' · ');
 
     // Fetch all needed aliyot in parallel
-    const aliyahRefs = indices.map(i => parashat.aliyot[i]);
+    const aliyahRefs = aliyahSections.map(section => section.ref);
     const allTexts   = await Promise.all(aliyahRefs.map(fetchAliyahTexts));
 
     containerEl.innerHTML = '';
 
     allTexts.forEach((texts, pos) => {
-      const idx = indices[pos];
-      aliyahNameEl.textContent = `עליה ${HEBREW_ORDINALS[idx] || idx + 1}`;
+      const section = aliyahSections[pos];
+
+      containerEl.appendChild(createSectionSeparator(section.sectionLabel));
 
       const groupEl = buildVerseGroupEl(texts);
       containerEl.appendChild(groupEl);
