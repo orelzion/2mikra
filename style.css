@@ -1,8 +1,36 @@
+@font-face {
+  font-family: 'Shofar';
+  src: url('fonts/ShofarRegular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Shofar';
+  src: url('fonts/ShofarDemi-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Shofar';
+  src: url('fonts/ShofarRegularOblique.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'Shofar';
+  src: url('fonts/ShofarDemi-BoldOblique.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic;
+}
+
 :root {
   --font-size: 20;
-  --font-mikra: 'Noto Serif Hebrew', Georgia, serif;
+  --font-mikra: 'Shofar', serif;
   --font-rashi: 'Noto Rashi Hebrew', serif;
-  --font-verse: 'Heebo', 'Noto Serif Hebrew', sans-serif;
+  --font-verse: 'Shofar', serif;
   --color-mikra: #1a1a1a;
   --color-steinsaltz: #333333;
   --color-onkelos: #666666;
@@ -278,7 +306,7 @@ body {
 }
 
 .layer-mikra .verse {
-  font-family: var(--font-verse);
+  font-family: var(--font-mikra);
 }
 
 .layer-steinsaltz .verse,
