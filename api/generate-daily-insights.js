@@ -1,31 +1,20 @@
-// Vercel Cron Job: runs daily at 4:10am UTC.
-// Reads today's aliyah texts from Vercel Blob, generates insights via Gemini, saves result.
+// Vercel Cron Job: runs daily at 4:00am UTC.
+// Fetches today's aliyah texts from Sefaria, generates insights via Gemini,
+// and stores them in Upstash KV — one key per verse.
 
-import { list } from '@vercel/blob';
 import { Redis } from '@upstash/redis';
+import {
+  DAY_TO_ALIYAH,
+  getAliyahRefsForDay,
+  getJerusalemParts,
+  fetchAliyahTexts,
+  fetchCommentaries,
+  refToKvKey,
+} from './_sefaria.js';
 
 export const config = {
   maxDuration: 60,
 };
-
-// ─── Jerusalem date helpers ───────────────────────────────────────────────────
-
-function getJerusalemParts() {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jerusalem',
-    weekday: 'long',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
-  return {
-    weekday: parts.find(p => p.type === 'weekday').value,
-    year:    parts.find(p => p.type === 'year').value,
-    month:   parts.find(p => p.type === 'month').value,
-    day:     parts.find(p => p.type === 'day').value,
-  };
-}
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +50,7 @@ async function generateInsights(ref, torahVerses, commentaries) {
   const t = Date.now();
   console.log(`[generate-daily-insights] calling Gemini...`);
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -85,54 +74,6 @@ async function generateInsights(ref, torahVerses, commentaries) {
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) return { insights: {} };
   return JSON.parse(text);
-}
-
-async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 15000, label = 'blob-url' } = {}) {
-  let lastStatus = 0;
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    const start = Date.now();
-    try {
-      const signal = AbortSignal.timeout(timeoutMs);
-      const res = await fetch(url, { signal });
-
-      if (res.ok) {
-        return await res.json();
-      }
-
-      lastStatus = res.status;
-      if (res.status >= 500 && attempt < attempts) {
-        const delayMs = 250 * attempt;
-        console.warn(`[generate-daily-insights] ${label} read attempt ${attempt}/${attempts} failed — HTTP ${res.status} (${Date.now() - start}ms), retrying in ${delayMs}ms`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-
-      return { __errorStatus: res.status };
-    } catch (err) {
-      lastError = err;
-      if (attempt < attempts) {
-        const delayMs = 250 * attempt;
-        console.warn(`[generate-daily-insights] ${label} read attempt ${attempt}/${attempts} errored (${Date.now() - start}ms): ${err.message}; retrying in ${delayMs}ms`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-    }
-  }
-
-  if (lastError) {
-    throw lastError;
-  }
-  return { __errorStatus: lastStatus || 503 };
-}
-
-function refToKvKey(ref) {
-  // "Genesis 1:1" → "insights:Genesis:1:1"
-  const spaceIdx = ref.lastIndexOf(' ');
-  const book = ref.slice(0, spaceIdx);
-  const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
-  return `insights:${book}:${chapter}:${verse}`;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -159,68 +100,81 @@ export default async function handler(req, res) {
     return res.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
-  // Read texts saved by fetch-daily-texts
-  const blobPath = `texts/${dateKey}.json`;
-  console.log(`[generate-daily-insights] looking up ${blobPath} in Blob...`);
-  const { blobs } = await list({ prefix: blobPath });
-  const exactBlob = blobs.find((blob) => blob.pathname === blobPath);
-
-  if (!exactBlob) {
-    console.error(`[generate-daily-insights] texts blob not found for ${dateKey}`);
-    return res.status(404).json({ error: `${blobPath} not found in Blob — run fetch-daily-texts first` });
-  }
-
+  // Fetch parasha calendar from Sefaria
+  console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
   const t1 = Date.now();
-  let textsPayload;
-  let primaryStatus = 0;
+  const calRes = await fetch('https://www.sefaria.org/api/calendars');
+  if (!calRes.ok) {
+    console.error(`[generate-daily-insights] calendar fetch failed — HTTP ${calRes.status}`);
+    return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
+  }
+  const calendar = await calRes.json();
+  console.log(`[generate-daily-insights] calendar fetched (${Date.now() - t1}ms)`);
 
-  try {
-    textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.url, { label: 'blob.url' });
-  } catch (err) {
-    console.warn(`[generate-daily-insights] failed reading via blob.url — ${err.message}; trying downloadUrl`);
+  const parashat = (calendar.calendar_items || []).find(i => i.title?.en === 'Parashat Hashavua');
+  if (!parashat) {
+    return res.status(404).json({ error: 'Parashat Hashavua not found in calendar' });
   }
 
-  if (!textsPayload || textsPayload.__errorStatus) {
-    primaryStatus = textsPayload?.__errorStatus || 0;
+  const aliyot     = parashat.extraDetails?.aliyot || [];
+  const aliyahRefs = getAliyahRefsForDay(dayOfWeek, aliyot);
 
-    try {
-      textsPayload = await readJsonFromBlobUrlWithRetry(exactBlob.downloadUrl, { label: 'blob.downloadUrl' });
-    } catch (err) {
-      console.error(`[generate-daily-insights] failed to read texts blob — ERROR: ${err.message}`);
-      return res.status(502).json({ error: 'Failed to read texts blob', details: err.message, primaryStatus });
+  if (aliyahRefs.length === 0) {
+    return res.status(404).json({ error: 'No aliyah refs found', dayOfWeek });
+  }
+
+  console.log(`[generate-daily-insights] parasha=${parashat.displayValue?.en} refs=${aliyahRefs.join(', ')}`);
+
+  // Fetch mikra texts + commentaries in parallel
+  console.log(`[generate-daily-insights] fetching mikra + commentaries from Sefaria...`);
+  const t2 = Date.now();
+  const [mikraResults, commentariesArray] = await Promise.all([
+    Promise.all(aliyahRefs.map(fetchAliyahTexts)),
+    Promise.all(aliyahRefs.map(fetchCommentaries)),
+  ]);
+  console.log(`[generate-daily-insights] Sefaria fetches done (${Date.now() - t2}ms)`);
+
+  const mikraArrays = mikraResults.map(r => r.verses);
+  const verseRefs   = mikraResults.flatMap(r => r.verseRefs);
+  const torahVerses = mikraArrays.flat();
+
+  // Flatten commentaries aligned to torahVerses
+  const combined = { rashi: [], ramban: [], haamekDavar: [], ravHirsch: [] };
+  mikraArrays.forEach((mikraVerses, aliyahPos) => {
+    const c = commentariesArray[aliyahPos] || {};
+    for (let v = 0; v < mikraVerses.length; v++) {
+      combined.rashi.push(c.rashi?.[v] || []);
+      combined.ramban.push(c.ramban?.[v] || []);
+      combined.haamekDavar.push(c.haamekDavar?.[v] || []);
+      combined.ravHirsch.push(c.ravHirsch?.[v] || []);
     }
-  }
+  });
 
-  if (textsPayload.__errorStatus) {
-    console.error(`[generate-daily-insights] failed to read texts blob — HTTP url=${primaryStatus || 'n/a'} downloadUrl=${textsPayload.__errorStatus}`);
-    return res.status(502).json({
-      error: 'Failed to read texts blob',
-      blobStatus: { url: primaryStatus || null, downloadUrl: textsPayload.__errorStatus },
-    });
-  }
-
-  const { refs, torahVerses, verseRefs, commentaries } = textsPayload;
-  console.log(`[generate-daily-insights] texts blob read (${Date.now() - t1}ms) — ${torahVerses.length} verses, refs=${refs.join(', ')}`);
+  console.log(`[generate-daily-insights] ${torahVerses.length} verses, ${verseRefs.length} refs`);
 
   // Generate insights via Gemini
-  const insights = await generateInsights(refs.join(', '), torahVerses, commentaries);
-
+  const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, combined);
   const insightsByIndex = insights.insights || {};
+
+  // Store in KV: one key per verse + date→verseRefs index
   const redis = Redis.fromEnv();
   const pipeline = redis.pipeline();
   let savedCount = 0;
 
   for (const [idxStr, verseInsights] of Object.entries(insightsByIndex)) {
-    const verseRef = verseRefs?.[parseInt(idxStr, 10)];
+    const verseRef = verseRefs[parseInt(idxStr, 10)];
     if (!verseRef) continue;
     pipeline.setnx(refToKvKey(verseRef), verseInsights);
     savedCount++;
   }
 
-  console.log(`[generate-daily-insights] writing ${savedCount} verse insights to KV...`);
-  const t2 = Date.now();
-  await pipeline.exec();
-  console.log(`[generate-daily-insights] KV write done (${Date.now() - t2}ms) — total=${Date.now() - start}ms`);
+  // Store date→verseRefs so daily-insights can look up KV keys by date
+  pipeline.set(`date:${dateKey}`, verseRefs);
 
-  return res.json({ success: true, date: dateKey, refs, savedCount });
+  console.log(`[generate-daily-insights] writing ${savedCount} verse insights + date index to KV...`);
+  const t3 = Date.now();
+  await pipeline.exec();
+  console.log(`[generate-daily-insights] KV write done (${Date.now() - t3}ms) — total=${Date.now() - start}ms`);
+
+  return res.json({ success: true, date: dateKey, refs: aliyahRefs, savedCount });
 }

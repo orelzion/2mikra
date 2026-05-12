@@ -1,9 +1,9 @@
 // GET /api/daily-insights
 // Returns pre-generated insights for a date (Jerusalem date by default).
-// Reads verseRefs from the texts blob, then batch-fetches insights from Upstash KV.
+// Reads verseRefs from KV date index, then batch-fetches verse insights.
 
-import { list } from '@vercel/blob';
 import { Redis } from '@upstash/redis';
+import { refToKvKey } from './_sefaria.js';
 
 function getJerusalemDateKey() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -11,31 +11,13 @@ function getJerusalemDateKey() {
   }).format(new Date());
 }
 
-function getRequestedDateFromUrl(reqUrl) {
-  if (typeof reqUrl !== 'string' || reqUrl.length === 0) return '';
-
-  try {
-    const url = new URL(reqUrl, 'https://mikra.local');
-    return url.searchParams.get('date') || '';
-  } catch {
-    return '';
-  }
-}
-
 function resolveDateKey(req) {
-  const requestedDate = getRequestedDateFromUrl(req.url);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
-    return requestedDate;
-  }
+  try {
+    const url = new URL(req.url, 'https://mikra.local');
+    const requested = url.searchParams.get('date') || '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(requested)) return requested;
+  } catch {}
   return getJerusalemDateKey();
-}
-
-function refToKvKey(ref) {
-  // "Genesis 1:1" → "insights:Genesis:1:1"
-  const spaceIdx = ref.lastIndexOf(' ');
-  const book = ref.slice(0, spaceIdx);
-  const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
-  return `insights:${book}:${chapter}:${verse}`;
 }
 
 export default async function handler(req, res) {
@@ -55,26 +37,13 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
 
   const dateKey = resolveDateKey(req);
-  const textsBlobPath = `texts/${dateKey}.json`;
+  const redis = Redis.fromEnv();
 
-  const { blobs } = await list({ prefix: textsBlobPath });
-  const textsBlob = blobs.find(b => b.pathname === textsBlobPath);
-
-  if (!textsBlob) {
-    return res.status(200).json({ insights: {} });
-  }
-
-  const textsRes = await fetch(textsBlob.url, { cache: 'no-store' });
-  if (!textsRes.ok) {
-    return res.status(200).json({ insights: {} });
-  }
-
-  const { verseRefs } = await textsRes.json();
+  const verseRefs = await redis.get(`date:${dateKey}`);
   if (!verseRefs || verseRefs.length === 0) {
     return res.status(200).json({ insights: {} });
   }
 
-  const redis = Redis.fromEnv();
   const kvKeys = verseRefs.map(refToKvKey);
   const values = await redis.mget(...kvKeys);
 
