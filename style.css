@@ -30,7 +30,7 @@
   --font-size: 20;
   --font-mikra: 'Shofar', serif;
   --font-rashi: 'Noto Rashi Hebrew', serif;
-  --font-verse: 'Shofar', serif;
+  --font-verse: 'Heebo', 'Noto Serif Hebrew', sans-serif;
   --color-mikra: #1a1a1a;
   --color-steinsaltz: #333333;
   --color-onkelos: #666666;
@@ -208,13 +208,13 @@ body {
 /* ── Mikra (original Hebrew text) ── */
 .layer-mikra {
   font-family: var(--font-mikra);
-  font-weight: 700;
+  font-weight: 400;
   font-size: calc(var(--font-size) * 1.1px);
 }
 
 /* ── Steinsaltz (same font as mikra, lighter weight) ── */
 .layer-steinsaltz {
-  font-family: var(--font-mikra);
+  font-family: var(--font-verse);
   font-weight: 400;
   color: var(--color-steinsaltz);
 }
