@@ -305,9 +305,6 @@ body {
   line-height: 1.8;
 }
 
-.layer-mikra .verse {
-  font-family: var(--font-verse);
-}
 
 .layer-steinsaltz .verse,
 .layer-onkelos .verse {

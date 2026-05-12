@@ -2,12 +2,8 @@
   "outputDirectory": ".",
   "crons": [
     {
-      "path": "/api/fetch-daily-texts",
-      "schedule": "0 4 * * *"
-    },
-    {
       "path": "/api/generate-daily-insights",
-      "schedule": "10 4 * * *"
+      "schedule": "0 4 * * *"
     }
   ],
   "rewrites": [
