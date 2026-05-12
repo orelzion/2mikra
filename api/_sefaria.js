@@ -123,14 +123,51 @@ export function deriveVerseRefs(data, text) {
   return refs;
 }
 
+// Walks text and the ref structure simultaneously so verses[i] and verseRefs[i]
+// are guaranteed to point to the same segment — filtering is applied once, to both.
+function flattenVersesWithRefs(data, text) {
+  const book = data?.indexTitle;
+  const sections = data?.sections;
+  const hasRefs = !!(book && sections && sections.length >= 2);
+  const startChapter = hasRefs ? sections[0] : 0;
+  const startVerse   = hasRefs ? sections[1] : 0;
+
+  const pairs = [];
+
+  function add(raw, chapter, verseNum) {
+    if (typeof raw !== 'string' || !raw.trim()) return;
+    pairs.push({
+      verse:    raw.trim(),
+      verseRef: hasRefs ? `${book} ${chapter}:${verseNum}` : null,
+    });
+  }
+
+  if (!text) return pairs;
+
+  if (typeof text === 'string') {
+    add(text, startChapter, startVerse);
+  } else if (text.every(v => typeof v === 'string')) {
+    text.forEach((v, i) => add(v, startChapter, startVerse + i));
+  } else {
+    text.forEach((chapter, chIdx) => {
+      const chapterNum  = startChapter + chIdx;
+      const verseStart  = chIdx === 0 ? startVerse : 1;
+      const verses = Array.isArray(chapter) ? chapter : (chapter ? [chapter] : []);
+      verses.forEach((v, vIdx) => add(v, chapterNum, verseStart + vIdx));
+    });
+  }
+
+  return pairs;
+}
+
 export async function fetchAliyahTexts(ref) {
   const mikraRef = convertRefFormat(ref);
   const mikraData = await fetchText(mikraRef);
   const mikraVersion = selectVersion(mikraData, ['Miqra according to the Masorah', "Tanach with Ta'amei Hamikra"]);
-  const text = mikraVersion?.text ?? null;
+  const pairs = flattenVersesWithRefs(mikraData, mikraVersion?.text ?? null);
   return {
-    verses: flattenVerses(text),
-    verseRefs: deriveVerseRefs(mikraData, text),
+    verses:    pairs.map(p => p.verse),
+    verseRefs: pairs.map(p => p.verseRef),
   };
 }
 

@@ -152,6 +152,11 @@ export default async function handler(req, res) {
 
   console.log(`[generate-daily-insights] ${torahVerses.length} verses, ${verseRefs.length} refs`);
 
+  if (verseRefs.length === 0) {
+    console.error(`[generate-daily-insights] verseRefs empty — Sefaria returned no usable verse data`);
+    return res.status(500).json({ error: 'verseRefs empty — cannot store insights by verse', aliyahRefs });
+  }
+
   // Generate insights via Gemini
   const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, combined);
   const insightsByIndex = insights.insights || {};
