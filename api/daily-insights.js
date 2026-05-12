@@ -1,7 +1,9 @@
 // GET /api/daily-insights
-// Returns the pre-generated insights for a date key (Jerusalem date by default) from Vercel Blob.
+// Returns pre-generated insights for a date (Jerusalem date by default).
+// Reads verseRefs from the texts blob, then batch-fetches insights from Upstash KV.
 
 import { list } from '@vercel/blob';
+import { Redis } from '@upstash/redis';
 
 function getJerusalemDateKey() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -28,6 +30,14 @@ function resolveDateKey(req) {
   return getJerusalemDateKey();
 }
 
+function refToKvKey(ref) {
+  // "Genesis 1:1" → "insights:Genesis:1:1"
+  const spaceIdx = ref.lastIndexOf(' ');
+  const book = ref.slice(0, spaceIdx);
+  const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
+  return `insights:${book}:${chapter}:${verse}`;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -42,21 +52,37 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+
   const dateKey = resolveDateKey(req);
-  const blobPath = `insights/${dateKey}.json`;
+  const textsBlobPath = `texts/${dateKey}.json`;
 
-  const { blobs } = await list({ prefix: blobPath });
-  const exactBlob = blobs.find((blob) => blob.pathname === blobPath);
+  const { blobs } = await list({ prefix: textsBlobPath });
+  const textsBlob = blobs.find(b => b.pathname === textsBlobPath);
 
-  if (!exactBlob) {
-    res.setHeader('Cache-Control', 'no-store, max-age=0');
+  if (!textsBlob) {
     return res.status(200).json({ insights: {} });
   }
 
-  const blobRes = await fetch(exactBlob.url, { cache: 'no-store' });
-  const text = await blobRes.text();
+  const textsRes = await fetch(textsBlob.url, { cache: 'no-store' });
+  if (!textsRes.ok) {
+    return res.status(200).json({ insights: {} });
+  }
 
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  const { verseRefs } = await textsRes.json();
+  if (!verseRefs || verseRefs.length === 0) {
+    return res.status(200).json({ insights: {} });
+  }
+
+  const redis = Redis.fromEnv();
+  const kvKeys = verseRefs.map(refToKvKey);
+  const values = await redis.mget(...kvKeys);
+
+  const insightsObj = {};
+  values.forEach((val, idx) => {
+    if (val != null) insightsObj[String(idx)] = val;
+  });
+
   res.setHeader('Content-Type', 'application/json');
-  return res.status(200).send(text);
+  return res.status(200).json({ insights: insightsObj });
 }

@@ -2,7 +2,7 @@
 // Reads today's aliyah texts from Vercel Blob, generates insights via Gemini, saves result.
 
 import { list } from '@vercel/blob';
-import { put } from '@vercel/blob';
+import { Redis } from '@upstash/redis';
 
 export const config = {
   maxDuration: 60,
@@ -127,6 +127,14 @@ async function readJsonFromBlobUrlWithRetry(url, { attempts = 3, timeoutMs = 150
   return { __errorStatus: lastStatus || 503 };
 }
 
+function refToKvKey(ref) {
+  // "Genesis 1:1" → "insights:Genesis:1:1"
+  const spaceIdx = ref.lastIndexOf(' ');
+  const book = ref.slice(0, spaceIdx);
+  const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
+  return `insights:${book}:${chapter}:${verse}`;
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -191,20 +199,28 @@ export default async function handler(req, res) {
     });
   }
 
-  const { refs, torahVerses, commentaries } = textsPayload;
+  const { refs, torahVerses, verseRefs, commentaries } = textsPayload;
   console.log(`[generate-daily-insights] texts blob read (${Date.now() - t1}ms) — ${torahVerses.length} verses, refs=${refs.join(', ')}`);
 
   // Generate insights via Gemini
   const insights = await generateInsights(refs.join(', '), torahVerses, commentaries);
 
-  console.log(`[generate-daily-insights] saving insights blob...`);
-  const t2 = Date.now();
-  await put(`insights/${dateKey}.json`, JSON.stringify(insights), {
-    access: 'public',
-    addRandomSuffix: false,
-    contentType: 'application/json',
-  });
-  console.log(`[generate-daily-insights] blob saved (${Date.now() - t2}ms) — total=${Date.now() - start}ms`);
+  const insightsByIndex = insights.insights || {};
+  const redis = Redis.fromEnv();
+  const pipeline = redis.pipeline();
+  let savedCount = 0;
 
-  return res.json({ success: true, date: dateKey, refs });
+  for (const [idxStr, verseInsights] of Object.entries(insightsByIndex)) {
+    const verseRef = verseRefs?.[parseInt(idxStr, 10)];
+    if (!verseRef) continue;
+    pipeline.setnx(refToKvKey(verseRef), verseInsights);
+    savedCount++;
+  }
+
+  console.log(`[generate-daily-insights] writing ${savedCount} verse insights to KV...`);
+  const t2 = Date.now();
+  await pipeline.exec();
+  console.log(`[generate-daily-insights] KV write done (${Date.now() - t2}ms) — total=${Date.now() - start}ms`);
+
+  return res.json({ success: true, date: dateKey, refs, savedCount });
 }

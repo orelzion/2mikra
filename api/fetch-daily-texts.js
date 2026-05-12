@@ -97,6 +97,33 @@ function flattenVerses(text) {
   });
 }
 
+function deriveVerseRefs(data, text) {
+  const book = data?.indexTitle;
+  const sections = data?.sections;
+  if (!book || !sections || sections.length < 2 || !text) return [];
+
+  const startChapter = sections[0];
+  const startVerse = sections[1];
+  const refs = [];
+
+  if (typeof text === 'string') {
+    refs.push(`${book} ${startChapter}:${startVerse}`);
+  } else if (text.every(v => typeof v === 'string')) {
+    // Single chapter range
+    text.forEach((_, i) => refs.push(`${book} ${startChapter}:${startVerse + i}`));
+  } else {
+    // Multi-chapter range
+    text.forEach((chapter, chIdx) => {
+      const chapterNum = startChapter + chIdx;
+      const verseStart = chIdx === 0 ? startVerse : 1;
+      const verses = Array.isArray(chapter) ? chapter : (chapter ? [chapter] : []);
+      verses.forEach((_, vIdx) => refs.push(`${book} ${chapterNum}:${verseStart + vIdx}`));
+    });
+  }
+
+  return refs;
+}
+
 function flattenCommentaryVerses(text) {
   if (!text) return [];
   if (typeof text === 'string') return [[text.trim()]].filter(Boolean);
@@ -115,7 +142,11 @@ async function fetchAliyahTexts(ref) {
   const mikraRef = convertRefFormat(ref);
   const mikraData = await fetchText(mikraRef);
   const mikraVersion = selectVersion(mikraData, ['Miqra according to the Masorah', "Tanach with Ta'amei Hamikra"]);
-  return flattenVerses(mikraVersion?.text ?? null);
+  const text = mikraVersion?.text ?? null;
+  return {
+    verses: flattenVerses(text),
+    verseRefs: deriveVerseRefs(mikraData, text),
+  };
 }
 
 async function fetchCommentaries(ref) {
@@ -193,14 +224,16 @@ export default async function handler(req, res) {
   // Fetch mikra texts + commentaries in parallel
   console.log(`[fetch-daily-texts] fetching mikra + commentaries in parallel...`);
   const t2 = Date.now();
-  const [mikraArrays, commentariesArray] = await Promise.all([
+  const [mikraResults, commentariesArray] = await Promise.all([
     Promise.all(aliyahRefs.map(fetchAliyahTexts)),
     Promise.all(aliyahRefs.map(fetchCommentaries)),
   ]);
   console.log(`[fetch-daily-texts] all Sefaria fetches done (${Date.now() - t2}ms)`);
 
+  const mikraArrays = mikraResults.map(r => r.verses);
+  const verseRefs = mikraResults.flatMap(r => r.verseRefs);
   const torahVerses = mikraArrays.flat();
-  console.log(`[fetch-daily-texts] torahVerses=${torahVerses.length} verses`);
+  console.log(`[fetch-daily-texts] torahVerses=${torahVerses.length} verses, verseRefs=${verseRefs.length}`);
 
   const flatCommentaries = commentariesArray.map(c => ({
     rashi:       flattenCommentaryVerses(c.rashi),
@@ -225,7 +258,7 @@ export default async function handler(req, res) {
 
   console.log(`[fetch-daily-texts] saving texts blob...`);
   const t3 = Date.now();
-  await put(`texts/${dateKey}.json`, JSON.stringify({ refs: aliyahRefs, torahVerses, commentaries: combined }), {
+  await put(`texts/${dateKey}.json`, JSON.stringify({ refs: aliyahRefs, torahVerses, verseRefs, commentaries: combined }), {
     access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
