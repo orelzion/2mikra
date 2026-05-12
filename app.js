@@ -442,7 +442,13 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
 
         const dibur = document.createElement('span');
         dibur.className = 'dibur-hamatchil';
-        dibur.textContent = insight.commentator + ':';
+        const COMMENTATOR_HE = {
+          'Rashi': 'רש״י',
+          'Ramban': 'רמב״ן',
+          "Ha'amek Davar": 'העמק דבר',
+          'Rav Hirsch': 'רש״ר הירש',
+        };
+        dibur.textContent = (COMMENTATOR_HE[insight.commentator] ?? insight.commentator) + ':';
 
         const text = document.createElement('span');
         text.textContent = insight.insight;
