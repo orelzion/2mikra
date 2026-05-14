@@ -175,6 +175,7 @@ async function fetchAliyahTexts(ref) {
     mikra:      mikraVersion?.text      ?? null,
     steinsaltz: steinsaltzVersion?.text ?? null,
     onkelos:    onkelosVersion?.text    ?? null,
+    verseRefs:  deriveVerseRefs(mikraData, mikraVersion?.text ?? null),
   };
 }
 
@@ -200,6 +201,37 @@ function flattenVerses(text) {
   });
 }
 
+// Derive verse refs from a Sefaria v3 API response + its text array,
+// mirroring flattenVerses so verseRefs[i] always matches flattenVerses(text)[i].
+function deriveVerseRefs(data, text) {
+  const book = data?.indexTitle;
+  const sections = data?.sections;
+  if (!book || !sections || sections.length < 2 || !text) return [];
+
+  const startChapter = sections[0];
+  const startVerse   = sections[1];
+  const refs = [];
+
+  if (typeof text === 'string') {
+    if (text.trim()) refs.push(`${book} ${startChapter}:${startVerse}`);
+  } else if (text.every(v => typeof v === 'string')) {
+    text.forEach((v, i) => {
+      if (typeof v === 'string' && v.trim()) refs.push(`${book} ${startChapter}:${startVerse + i}`);
+    });
+  } else {
+    text.forEach((chapter, chIdx) => {
+      const chapterNum = startChapter + chIdx;
+      const verseStart = chIdx === 0 ? startVerse : 1;
+      const verses = Array.isArray(chapter) ? chapter : (chapter ? [chapter] : []);
+      verses.forEach((v, vIdx) => {
+        if (typeof v === 'string' && v.trim()) refs.push(`${book} ${chapterNum}:${verseStart + vIdx}`);
+      });
+    });
+  }
+
+  return refs;
+}
+
 
 /**
  * Build and return a container DOM element for one aliyah, laid out as:
@@ -212,6 +244,7 @@ function buildVerseGroupEl(texts) {
   const mikraVerses      = flattenVerses(texts.mikra);
   const steinsaltzVerses = flattenVerses(texts.steinsaltz);
   const onkelosVerses    = flattenVerses(texts.onkelos);
+  const { verseRefs = [] } = texts;
 
   const count = Math.max(mikraVerses.length, steinsaltzVerses.length, onkelosVerses.length);
 
@@ -219,6 +252,7 @@ function buildVerseGroupEl(texts) {
     const triplet = document.createElement('div');
     triplet.className = 'verse-triplet';
     triplet.dataset.verseIndex = i;
+    if (verseRefs[i]) triplet.dataset.verseRef = verseRefs[i];
 
     // ── Mikra (contains HTML entities and <b> paseq markers) ──
     if (mikraVerses[i] !== undefined) {
@@ -412,17 +446,11 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
       return { status: 'empty', reason: 'no insights' };
     }
 
-    const triplets = containerEl.querySelectorAll('.verse-triplet');
+    const triplets = containerEl.querySelectorAll('.verse-triplet[data-verse-ref]');
     let renderedCount = 0;
-    let outOfBoundsInsights = false;
 
-    for (const [verseIdx, insights] of Object.entries(data.insights)) {
-      const parsedIdx = Number(verseIdx);
-      const triplet = Number.isInteger(parsedIdx) ? triplets[parsedIdx] : null;
-      if (!triplet) {
-        outOfBoundsInsights = true;
-        continue;
-      }
+    for (const triplet of triplets) {
+      const insights = data.insights[triplet.dataset.verseRef];
       if (!insights || insights.length === 0) continue;
 
       const insightsLayer = document.createElement('div');
@@ -467,7 +495,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
       if (showFallbackMessage) {
         renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.');
       }
-      return { status: 'empty', reason: outOfBoundsInsights ? 'index mismatch' : 'no rendered insights' };
+      return { status: 'empty', reason: 'no rendered insights' };
     }
 
     return { status: 'loaded', renderedCount };
