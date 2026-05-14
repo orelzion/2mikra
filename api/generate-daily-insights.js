@@ -21,7 +21,7 @@ export const config = {
 const SYSTEM_PROMPT = `You are a Torah scholar with deep expertise in classical Jewish commentary.
 
 You will receive:
-1. Torah verse texts for an aliyah section
+1. Torah verse texts for an aliyah section, each labeled with its exact verse reference
 2. Raw commentary text from 4 commentators: Rashi, Ramban, Ha'amek Davar (Netziv), Rav Hirsch (in German)
 
 Your task: Extract only the "פנינים" — the gems — from these commentaries.
@@ -29,10 +29,10 @@ Output language: Hebrew only. All insights must be in Hebrew.
 Keep each insight concise: 2-3 sentences maximum.
 
 Return a JSON object with key "insights" containing an object where:
-- keys are 0-indexed verse numbers (as strings)
+- keys are the exact verse reference strings as given (e.g. "Numbers 3:17")
 - values are arrays of {commentator, insight} objects.`;
 
-async function generateInsights(ref, torahVerses, commentaries) {
+async function generateInsights(ref, torahVerses, verseRefs, commentaries) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
@@ -41,7 +41,8 @@ async function generateInsights(ref, torahVerses, commentaries) {
     const ramban      = (commentaries.ramban?.[idx]      || []).join(' | ');
     const haamekDavar = (commentaries.haamekDavar?.[idx] || []).join(' | ');
     const ravHirsch   = (commentaries.ravHirsch?.[idx]   || []).join(' | ');
-    return `Verse ${idx}: ${verse}\nRashi: ${rashi}\nRamban: ${ramban}\nHa'amek Davar: ${haamekDavar}\nRav Hirsch: ${ravHirsch}`;
+    const label = verseRefs[idx] ?? String(idx);
+    return `Verse "${label}": ${verse}\nRashi: ${rashi}\nRamban: ${ramban}\nHa'amek Davar: ${haamekDavar}\nRav Hirsch: ${ravHirsch}`;
   }).join('\n\n');
 
   const userPrompt = `Here are the verses and commentaries for ${ref}:\n\n${commentaryText}\n\nExtract the פנינים and return JSON.`;
@@ -158,17 +159,17 @@ export default async function handler(req, res) {
   }
 
   // Generate insights via Gemini
-  const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, combined);
-  const insightsByIndex = insights.insights || {};
+  const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, verseRefs, combined);
+  const insightsByRef = insights.insights || {};
 
   // Store in KV: one key per verse + date→verseRefs index
   const redis = Redis.fromEnv();
   const pipeline = redis.pipeline();
   let savedCount = 0;
 
-  for (const [idxStr, verseInsights] of Object.entries(insightsByIndex)) {
-    const verseRef = verseRefs[parseInt(idxStr, 10)];
-    if (!verseRef) continue;
+  for (const [verseRef, verseInsights] of Object.entries(insightsByRef)) {
+    // Accept only keys that look like valid verse refs to guard against Gemini mislabeling
+    if (!verseRef || !/^.+ \d+:\d+$/.test(verseRef)) continue;
     pipeline.setnx(refToKvKey(verseRef), verseInsights);
     savedCount++;
   }
