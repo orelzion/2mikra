@@ -105,7 +105,7 @@ function buildOnkelosRef(ref) {
 // ─── Sefaria API ──────────────────────────────────────────────────────────────
 
 async function fetchCalendar() {
-  const res = await fetch(`${BASE_URL}/api/calendars`);
+  const res = await fetch(`${BASE_URL}/api/calendars?diaspora=0`);
   if (!res.ok) throw new Error(`Calendar HTTP ${res.status}`);
   return res.json();
 }
