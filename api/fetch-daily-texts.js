@@ -197,7 +197,7 @@ export default async function handler(req, res) {
   // Fetch current parasha from Sefaria
   console.log(`[fetch-daily-texts] fetching Sefaria calendar...`);
   const t1 = Date.now();
-  const calRes = await fetch(`${BASE_URL}/api/calendars`);
+  const calRes = await fetch(`${BASE_URL}/api/calendars?diaspora=0`);
   if (!calRes.ok) {
     console.error(`[fetch-daily-texts] calendar fetch failed — HTTP ${calRes.status}`);
     return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
