@@ -1,10 +1,9 @@
 {
   "outputDirectory": ".",
   "crons": [
-    {
-      "path": "/api/generate-daily-insights",
-      "schedule": "0 4 * * *"
-    }
+    { "path": "/api/generate-daily-insights", "schedule": "0 4 * * *" },
+    { "path": "/api/generate-daily-insights", "schedule": "0 6 * * *" },
+    { "path": "/api/generate-daily-insights", "schedule": "0 8 * * *" }
   ],
   "rewrites": [
     {
