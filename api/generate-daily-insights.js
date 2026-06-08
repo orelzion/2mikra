@@ -100,6 +100,18 @@ export default async function handler(req, res) {
     return res.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
+  // Idempotency: skip if insights for today already exist in KV
+  const redis = Redis.fromEnv();
+  const existingRefs = await redis.get(`date:${dateKey}`);
+  if (existingRefs && existingRefs.length > 0) {
+    const firstKey = refToKvKey(existingRefs[0]);
+    const firstInsight = await redis.get(firstKey);
+    if (firstInsight) {
+      console.log(`[generate-daily-insights] already done for ${dateKey} — skipping`);
+      return res.json({ message: 'already generated', date: dateKey });
+    }
+  }
+
   // Fetch parasha calendar from Sefaria
   console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
   const t1 = Date.now();
@@ -162,7 +174,6 @@ export default async function handler(req, res) {
   const insightsByIndex = insights.insights || {};
 
   // Store in KV: one key per verse + date→verseRefs index
-  const redis = Redis.fromEnv();
   const pipeline = redis.pipeline();
   let savedCount = 0;
 
