@@ -49,7 +49,7 @@ export default async function handler(req, res) {
 
   const insightsObj = {};
   values.forEach((val, idx) => {
-    if (val != null) insightsObj[String(idx)] = val;
+    if (val != null) insightsObj[verseRefs[idx]] = val;
   });
 
   res.setHeader('Content-Type', 'application/json');
