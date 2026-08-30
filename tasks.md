@@ -131,10 +131,29 @@ Tasks derived from the PRD. Each task lists the responsible agent skill.
 - [x] Add `@keyframes` fade-in for when the box appears after background load
 - [x] Ensure RTL layout, proper Hebrew typography
 
+### 9b. Batched, Ref-Keyed Insights (2026-08-30 revision)
+**Agent:** *(general)*
+- [x] Create `api/_insights.js` — batching, ref-headed prompt, `responseSchema`, response validation
+- [x] Batch verses 6 at a time through a worker pool capped at 3 concurrent Gemini calls
+- [x] Give each Gemini call a 25s timeout + one retry; isolate a failing batch instead of failing the day
+- [x] Head each verse in the prompt with its real ref (`=== Genesis 12:1 ===`) instead of `Verse N:`
+- [x] Enforce `{book, chapter, verse, pearls[]}` via `responseSchema`, with a commentator enum
+- [x] Drop any returned entry naming a verse that was not in that batch
+- [x] Switch model to `gemini-3-flash-preview`
+- [x] Gap-fill: `mget` the day's keys and batch only the verses missing from KV
+- [x] Drop the `date:YYYY-MM-DD` index; store and serve by `insights:{book}:{chapter}:{verse}`
+- [x] `GET /api/daily-insights?refs=…` returns insights keyed by ref; validates, dedupes and caps refs
+- [x] `app.js`: derive verse refs client-side, tag each `.verse-triplet` with `data-verse-ref`, look up gems by ref
+- [x] Delete the unused `api/insights.js`
+- [x] Persist each batch as it completes, under a 48s deadline, so one slow batch can't discard the rest
+- [x] Namespace KV keys to `insights:v2` so legacy positional values are regenerated
+- [x] Reduce to a single daily cron (04:00 UTC)
+- [x] Add a `צור פנינים` retry button to the fallback, guarded by a per-day cap and a run lock
+
 ### 12. Security Review — Insights Feature
 **Agent:** `security`
 - [x] Verify all insight text uses `textContent` not `innerHTML`
-- [x] Verify `/api/insights.js` validates inputs and doesn't log API key
+- [x] Verify `/api/insights.js` validates inputs and doesn't log API key *(endpoint since deleted; `/api/daily-insights` validates refs)*
 - [x] Check no new XSS surfaces in DOM injection code
 - [x] Confirm Gemini API key is never sent to client
 

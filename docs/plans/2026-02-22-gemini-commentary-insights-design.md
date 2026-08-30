@@ -182,3 +182,108 @@ using the same `flattenVerses()` logic already in `app.js` — or a new equivale
 | Gemini returns error | `loadInsights()` returns early; no insight boxes shown |
 | Gemini returns malformed JSON | Catch parse error; return early |
 | Verse index mismatch | Skip that verse silently |
+
+---
+
+# Revision — 2026-08-30: Batched, ref-keyed insights
+
+**Status:** Implemented
+
+## Why
+
+The פנינים frequently failed to appear at all, and when they did appear they
+were sometimes attached to the wrong verse. Three causes:
+
+1. **Timeout.** The generator sent every verse of the day's aliyah (40+ on a
+   Friday double-aliyah) plus four full commentaries each in a *single* Gemini
+   call. That call regularly outran the function's 60s `maxDuration`, and when
+   it did, the whole day produced nothing.
+2. **Wrong-verse attribution.** The prompt labelled verses positionally
+   (`Verse 0:`, `Verse 1:` …) and asked for a free-form JSON object keyed by
+   those indices, with no `responseSchema` and no validation of the result.
+3. **Index-based lookup.** Storage was already per-verse, but everything around
+   it was positional: a `date:YYYY-MM-DD` → ordered `verseRefs` index, an
+   index-keyed API response, and `triplets[idx]` on the client. The client
+   flattened Sefaria's text independently of the server, so any divergence
+   shifted every gem.
+
+## What changed
+
+- **Batching.** `api/_insights.js` chunks the day's verses into batches of
+  **6**, run through a worker pool capped at **3** concurrent Gemini calls.
+  Each call has a 25s timeout and one retry; a batch that still fails is
+  isolated and reported, never thrown — the other batches still save.
+- **Ref-headed prompt + schema.** Each verse is introduced by its real ref
+  (`=== Genesis 12:1 ===`) instead of a position, and the call sends a
+  `responseSchema` requiring `{book, chapter, verse, pearls[]}` per entry, with
+  `commentator` constrained to an enum. `validateBatchResponse()` then drops any
+  entry naming a verse that was not in that batch.
+- **Ref-keyed storage and retrieval.** Insights are stored at
+  `insights:{book}:{chapter}:{verse}` (unchanged) and the `date:` index is gone.
+  The generator gap-fills: it `mget`s the day's keys and batches only what is
+  missing, so the 06:00 and 08:00 crons finish what a timed-out 04:00 run began.
+- **Model** is now `gemini-3-flash-preview`.
+- **`api/insights.js` deleted** — nothing called it, and it duplicated the stale
+  prompt on an unauthenticated endpoint that spent `GEMINI_API_KEY` on any POST.
+
+## API contract (replaces `POST /api/insights` and the date-based GET)
+
+### `GET /api/daily-insights?refs=Genesis 12:1,Genesis 12:2`
+
+```json
+{
+  "insights": {
+    "Genesis 12:1": [
+      { "commentator": "Rashi",  "insight": "המדרש מלמד ש..." },
+      { "commentator": "Ramban", "insight": "לפי הרמב\"ן..." }
+    ],
+    "Genesis 13:2": [
+      { "commentator": "Ha'amek Davar", "insight": "..." }
+    ]
+  }
+}
+```
+
+Refs are validated (`/^[A-Za-z'’. ]{1,60} \d{1,3}:\d{1,3}$/`), deduped, and
+capped at 200. A missing or entirely invalid `refs` param returns 400. Refs with
+no stored insights are omitted rather than returned empty.
+
+`commentator` values are the schema's English enum; `app.js` maps them to Hebrew
+labels (`COMMENTATOR_HE`) at render time.
+
+## Client
+
+`app.js` derives each verse's ref with its own `flattenVersesWithRefs()`, a
+mirror of the one in `api/_sefaria.js` (app.js is a classic script and cannot
+import from `api/`). Every `.verse-triplet` carries `data-verse-ref`, and
+`loadPreGeneratedInsights()` requests exactly those refs and looks up each gem by
+ref — no index arithmetic anywhere in the path.
+
+## Follow-up — single cron plus a retry button
+
+Three crons (04:00/06:00/08:00 UTC) existed to give a failed run two more
+chances. With incremental persistence and gap-filling, the extra runs are
+replaced by a reader-triggered retry:
+
+- `vercel.json` runs **one** cron, 04:00 UTC (07:00 Jerusalem).
+- When there are no פנינים to show, the fallback carries a **צור פנינים**
+  button that `POST`s to `/api/generate-daily-insights`, then re-reads and
+  renders whatever was produced.
+
+`/api/generate-daily-insights` now has two modes:
+
+| Mode | Trigger | Guards |
+|---|---|---|
+| cron | `Authorization: Bearer $CRON_SECRET` | none |
+| manual | any other request | `POST` only, one run at a time, capped per day |
+
+Manual runs are bounded because they spend Gemini quota: a `lock:generate:{date}`
+key held with `SET NX EX 120` serialises them (a second click gets 409
+`already running`), and `manual:{date}` counts them against
+`MANUAL_RUNS_PER_DAY` (429 `daily limit reached`). The lock is released in a
+`finally`, so a failed run stays retryable. When `CRON_SECRET` is unset every
+request is treated as manual, so the endpoint is never unguarded.
+
+Gap-filling keeps the button cheap: once the day is complete a manual run makes
+zero Gemini calls and returns `already generated`, and after a partial run it
+only generates the verses still missing.

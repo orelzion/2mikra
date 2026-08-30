@@ -411,3 +411,51 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ─── פנינים fallback + retry ────────────────────────────────────────────── */
+
+.insights-fallback {
+  margin: 20px 0;
+  padding: 16px 15px;
+  background-color: #fdf8f0;
+  border: 1px solid #e8dfd0;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.insights-fallback-text {
+  margin: 0;
+  font-family: var(--font-verse);
+  font-size: calc(var(--font-size) * 0.8px);
+  color: var(--color-onkelos);
+  line-height: 1.6;
+}
+
+.insights-retry {
+  margin-top: 12px;
+  padding: 9px 22px;
+  min-height: 44px;
+  font-family: var(--font-verse);
+  font-size: calc(var(--font-size) * 0.8px);
+  color: var(--color-mikra);
+  background-color: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.insights-retry:hover:not(:disabled) {
+  background-color: #f5efe4;
+  border-color: #c9c0b2;
+}
+
+.insights-retry:focus-visible {
+  outline: 2px solid var(--color-mikra);
+  outline-offset: 2px;
+}
+
+.insights-retry:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

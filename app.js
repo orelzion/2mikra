@@ -40,12 +40,6 @@ function getJerusalemDayOfWeek() {
   return map[weekday];
 }
 
-function getJerusalemDateKey() {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jerusalem',
-  }).format(new Date());
-}
-
 // Maps Jerusalem weekday → aliyah array index/indices.
 // Friday base is [5, 6], with Maftir (7) appended when available in source aliyot.
 // Saturday returns null (Shabbat rest screen).
@@ -152,9 +146,51 @@ function selectVersion(data, preferredTitles) {
 }
 
 /**
+ * Walk the mikra text and its ref structure together so verses[i] and
+ * verseRefs[i] always point at the same segment — filtering is applied once,
+ * to both. Mirrors flattenVersesWithRefs in api/_sefaria.js so the client and
+ * the insights generator derive identical refs.
+ */
+function flattenVersesWithRefs(data, text) {
+  const book     = data?.indexTitle;
+  const sections = data?.sections;
+  const hasRefs  = !!(book && sections && sections.length >= 2);
+  const startChapter = hasRefs ? sections[0] : 0;
+  const startVerse   = hasRefs ? sections[1] : 0;
+
+  const pairs = [];
+
+  function add(raw, chapter, verseNum) {
+    if (typeof raw !== 'string' || !raw.trim()) return;
+    pairs.push({
+      verse:    raw.trim(),
+      verseRef: hasRefs ? `${book} ${chapter}:${verseNum}` : null,
+    });
+  }
+
+  if (!text) return pairs;
+
+  if (typeof text === 'string') {
+    add(text, startChapter, startVerse);
+  } else if (text.every(v => typeof v === 'string')) {
+    text.forEach((v, i) => add(v, startChapter, startVerse + i));
+  } else {
+    text.forEach((chapter, chIdx) => {
+      const chapterNum = startChapter + chIdx;
+      const verseStart = chIdx === 0 ? startVerse : 1;
+      const verses = Array.isArray(chapter) ? chapter : (chapter ? [chapter] : []);
+      verses.forEach((v, vIdx) => add(v, chapterNum, verseStart + vIdx));
+    });
+  }
+
+  return pairs;
+}
+
+/**
  * Fetch Mikra, Steinsaltz, and Onkelos in parallel for a given ref string.
- * Returns { mikra, steinsaltz, onkelos } where each is an array of verses (strings),
- * or null if unavailable.
+ * Returns { mikra, mikraRefs, steinsaltz, onkelos }, where mikra is a flat
+ * array of verse strings and mikraRefs aligns 1:1 with it ("Genesis 12:1").
+ * Steinsaltz and Onkelos are returned raw for flattenVerses.
  */
 async function fetchAliyahTexts(ref) {
   const mikraRef      = convertRefFormat(ref);
@@ -171,8 +207,11 @@ async function fetchAliyahTexts(ref) {
   const steinsaltzVersion = selectVersion(steinsaltzData, ['The Koren Steinsaltz Tanakh HaMevoar - Hebrew']);
   const onkelosVersion    = selectVersion(onkelosData, ['Sifsei Chachomim Chumash, Metsudah Publications, 2009', 'Onkelos Exodus']);
 
+  const pairs = flattenVersesWithRefs(mikraData, mikraVersion?.text ?? null);
+
   return {
-    mikra:      mikraVersion?.text      ?? null,
+    mikra:      pairs.map(p => p.verse),
+    mikraRefs:  pairs.map(p => p.verseRef),
     steinsaltz: steinsaltzVersion?.text ?? null,
     onkelos:    onkelosVersion?.text    ?? null,
   };
@@ -209,7 +248,9 @@ function buildVerseGroupEl(texts) {
   const group = document.createElement('div');
   group.className = 'verse-group';
 
-  const mikraVerses      = flattenVerses(texts.mikra);
+  // mikra arrives pre-flattened from fetchAliyahTexts, paired with mikraRefs
+  const mikraVerses      = texts.mikra || [];
+  const mikraRefs        = texts.mikraRefs || [];
   const steinsaltzVerses = flattenVerses(texts.steinsaltz);
   const onkelosVerses    = flattenVerses(texts.onkelos);
 
@@ -219,6 +260,7 @@ function buildVerseGroupEl(texts) {
     const triplet = document.createElement('div');
     triplet.className = 'verse-triplet';
     triplet.dataset.verseIndex = i;
+    if (mikraRefs[i]) triplet.dataset.verseRef = mikraRefs[i];
 
     // ── Mikra (contains HTML entities and <b> paseq markers) ──
     if (mikraVerses[i] !== undefined) {
@@ -382,11 +424,69 @@ async function render() {
   }
 }
 
-function renderInsightsFallbackMessage(containerEl, message) {
+/**
+ * Show why the פנינים aren't here, optionally with a button that generates
+ * them on demand. Only one cron run happens per day, so the button is the
+ * recovery path when that run failed or only got part way.
+ */
+function renderInsightsFallbackMessage(containerEl, message, { canRetry = false } = {}) {
   const fallback = document.createElement('div');
   fallback.className = 'insights-fallback';
-  fallback.textContent = message;
+
+  const text = document.createElement('p');
+  text.className = 'insights-fallback-text';
+  text.textContent = message;
+  fallback.appendChild(text);
+
+  if (canRetry) {
+    fallback.appendChild(buildInsightsRetryButton(containerEl, fallback, text));
+  }
+
   containerEl.appendChild(fallback);
+}
+
+function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'insights-retry';
+  button.textContent = 'צור פנינים';
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    textEl.textContent = 'מייצר פנינים… הפעולה עשויה לקחת עד דקה.';
+
+    let failure = null;
+    try {
+      // Generation runs to a ~48s deadline server-side; allow for the round trip.
+      const res = await fetch('/api/generate-daily-insights', {
+        method: 'POST',
+        signal: AbortSignal.timeout(90000),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        failure = data.error === 'already running'
+          ? 'הייצור כבר רץ ברקע. נסה שוב בעוד רגע.'
+          : data.error === 'daily limit reached'
+            ? 'הגעת למכסת הניסיונות להיום.'
+            : 'לא הצלחנו לייצר פנינים כרגע.';
+      }
+    } catch {
+      failure = 'לא הצלחנו לייצר פנינים כרגע.';
+    }
+
+    if (failure) {
+      textEl.textContent = failure;
+      button.disabled = false;
+      return;
+    }
+
+    // A partial run still leaves gems worth showing, so re-read either way.
+    fallbackEl.remove();
+    await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true });
+  });
+
+  return button;
 }
 
 /**
@@ -395,11 +495,21 @@ function renderInsightsFallbackMessage(containerEl, message) {
  */
 async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = false } = {}) {
   try {
-    const dateKey = getJerusalemDateKey();
-    const res = await fetch(`/api/daily-insights?date=${encodeURIComponent(dateKey)}`, { cache: 'no-store' });
+    const triplets = [...containerEl.querySelectorAll('.verse-triplet')]
+      .filter(t => t.dataset.verseRef);
+
+    if (triplets.length === 0) {
+      if (showFallbackMessage) {
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.');
+      }
+      return { status: 'empty', reason: 'no verse refs' };
+    }
+
+    const refs = [...new Set(triplets.map(t => t.dataset.verseRef))];
+    const res = await fetch(`/api/daily-insights?refs=${encodeURIComponent(refs.join(','))}`, { cache: 'no-store' });
     if (!res.ok) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
       }
       return { status: 'error', reason: `HTTP ${res.status}` };
     }
@@ -407,23 +517,18 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     const data = await res.json();
     if (!data.insights || Object.keys(data.insights).length === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.');
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.', { canRetry: true });
       }
       return { status: 'empty', reason: 'no insights' };
     }
 
-    const triplets = containerEl.querySelectorAll('.verse-triplet');
     let renderedCount = 0;
-    let outOfBoundsInsights = false;
 
-    for (const [verseIdx, insights] of Object.entries(data.insights)) {
-      const parsedIdx = Number(verseIdx);
-      const triplet = Number.isInteger(parsedIdx) ? triplets[parsedIdx] : null;
-      if (!triplet) {
-        outOfBoundsInsights = true;
-        continue;
-      }
+    for (const triplet of triplets) {
+      const insights = data.insights[triplet.dataset.verseRef];
       if (!insights || insights.length === 0) continue;
+      // Guard against a re-render appending a second פנינים block
+      if (triplet.querySelector('.mefarshim-container')) continue;
 
       const insightsLayer = document.createElement('div');
       insightsLayer.className = 'mefarshim-container';
@@ -465,15 +570,15 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
 
     if (renderedCount === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.');
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.', { canRetry: true });
       }
-      return { status: 'empty', reason: outOfBoundsInsights ? 'index mismatch' : 'no rendered insights' };
+      return { status: 'empty', reason: 'no rendered insights' };
     }
 
     return { status: 'loaded', renderedCount };
   } catch {
     if (showFallbackMessage) {
-      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
     }
     return { status: 'error', reason: 'fetch failed' };
   }

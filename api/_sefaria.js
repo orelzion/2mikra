@@ -192,10 +192,17 @@ export async function fetchCommentaries(ref) {
   };
 }
 
+// v2 namespace: v1 keys were written by the positional generator, which could
+// attach a gem to the wrong verse. The key format is otherwise identical, so
+// without the version those suspect values would be read back as "already
+// generated" and setnx would block the validated pipeline from correcting them.
+// Bumping the namespace regenerates everything through the ref-validated path.
+export const KV_NAMESPACE = 'insights:v2';
+
 export function refToKvKey(ref) {
-  // "Genesis 1:1" → "insights:Genesis:1:1"
+  // "Genesis 1:1" → "insights:v2:Genesis:1:1"
   const spaceIdx = ref.lastIndexOf(' ');
   const book = ref.slice(0, spaceIdx);
   const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
-  return `insights:${book}:${chapter}:${verse}`;
+  return `${KV_NAMESPACE}:${book}:${chapter}:${verse}`;
 }
