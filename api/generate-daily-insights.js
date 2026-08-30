@@ -1,16 +1,26 @@
-// Vercel Cron Job: runs daily at 4:00am UTC.
-// Fetches today's aliyah texts from Sefaria, generates insights via Gemini,
-// and stores them in Upstash KV — one key per verse.
+// Vercel Cron Job: runs daily at 4:00am UTC (with 6:00 and 8:00 gap-fill runs).
+// Fetches today's aliyah texts from Sefaria, generates insights via Gemini in
+// small batches, and stores them in Upstash KV — one key per book:chapter:verse.
 
 import { Redis } from '@upstash/redis';
 import {
-  DAY_TO_ALIYAH,
   getAliyahRefsForDay,
   getJerusalemParts,
   fetchAliyahTexts,
   fetchCommentaries,
   refToKvKey,
 } from './_sefaria.js';
+import {
+  BATCH_SIZE,
+  MAX_CONCURRENT,
+  MODEL,
+  SYSTEM_PROMPT,
+  INSIGHTS_SCHEMA,
+  buildVerseRecords,
+  buildBatchPrompt,
+  chunk,
+  validateBatchResponse,
+} from './_insights.js';
 
 export const config = {
   maxDuration: 60,
@@ -18,62 +28,95 @@ export const config = {
 
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a Torah scholar with deep expertise in classical Jewish commentary.
+const GEMINI_TIMEOUT_MS = 25000;
 
-You will receive:
-1. Torah verse texts for an aliyah section
-2. Raw commentary text from 4 commentators: Rashi, Ramban, Ha'amek Davar (Netziv), Rav Hirsch (in German)
+function isRetryable(status) {
+  return status === 429 || status >= 500;
+}
 
-Your task: Extract only the "פנינים" — the gems — from these commentaries.
-Output language: Hebrew only. All insights must be in Hebrew.
-Keep each insight concise: 2-3 sentences maximum.
-
-Return a JSON object with key "insights" containing an object where:
-- keys are 0-indexed verse numbers (as strings)
-- values are arrays of {commentator, insight} objects.`;
-
-async function generateInsights(ref, torahVerses, commentaries) {
+/**
+ * One Gemini call for one batch of verses. Returns
+ * { ok, entries } — ok:false means the call itself failed, which is distinct
+ * from a batch that succeeded but found no gems. A single bad batch must not
+ * sink the whole day, so failures are reported, never thrown.
+ */
+async function generateBatch(records, batchNum, totalBatches) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
-  const commentaryText = torahVerses.map((verse, idx) => {
-    const rashi       = (commentaries.rashi?.[idx]       || []).join(' | ');
-    const ramban      = (commentaries.ramban?.[idx]      || []).join(' | ');
-    const haamekDavar = (commentaries.haamekDavar?.[idx] || []).join(' | ');
-    const ravHirsch   = (commentaries.ravHirsch?.[idx]   || []).join(' | ');
-    return `Verse ${idx}: ${verse}\nRashi: ${rashi}\nRamban: ${ramban}\nHa'amek Davar: ${haamekDavar}\nRav Hirsch: ${ravHirsch}`;
-  }).join('\n\n');
+  const label      = `batch ${batchNum}/${totalBatches}`;
+  const userPrompt = buildBatchPrompt(records);
+  console.log(`[generate-daily-insights] ${label}: ${records.length} verses, ${userPrompt.length} chars (${records[0].ref}…${records[records.length - 1].ref})`);
 
-  const userPrompt = `Here are the verses and commentaries for ${ref}:\n\n${commentaryText}\n\nExtract the פנינים and return JSON.`;
-  console.log(`[generate-daily-insights] Gemini prompt size: ${userPrompt.length} chars`);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const t = Date.now();
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            contents: [{ parts: [{ text: userPrompt }] }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              responseSchema: INSIGHTS_SCHEMA,
+            },
+          }),
+        }
+      );
 
-  const t = Date.now();
-  console.log(`[generate-daily-insights] calling Gemini...`);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
+      if (!response.ok) {
+        const body = await response.text();
+        console.error(`[generate-daily-insights] ${label} attempt ${attempt}: HTTP ${response.status} after ${Date.now() - t}ms — ${body.slice(0, 300)}`);
+        if (attempt === 1 && isRetryable(response.status)) continue;
+        return { ok: false, entries: [] };
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      console.log(`[generate-daily-insights] ${label} responded (${Date.now() - t}ms)`);
+      if (!text) return { ok: true, entries: [] };
+
+      const validated = validateBatchResponse(JSON.parse(text), records);
+      console.log(`[generate-daily-insights] ${label}: ${validated.length}/${records.length} verses with gems`);
+      return { ok: true, entries: validated };
+
+    } catch (err) {
+      console.error(`[generate-daily-insights] ${label} attempt ${attempt} failed after ${Date.now() - t}ms:`, err.message);
+      if (attempt === 1) continue;
+      return { ok: false, entries: [] };
     }
-  );
-
-  if (!response.ok) {
-    const err = await response.json();
-    console.error(`[generate-daily-insights] Gemini error after ${Date.now() - t}ms:`, JSON.stringify(err));
-    throw new Error(`Gemini error: ${JSON.stringify(err)}`);
   }
 
-  const data = await response.json();
-  console.log(`[generate-daily-insights] Gemini responded (${Date.now() - t}ms)`);
+  return { ok: false, entries: [] };
+}
 
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) return { insights: {} };
-  return JSON.parse(text);
+/**
+ * Run the batches through a bounded worker pool so a long parasha can't fire
+ * a dozen simultaneous Gemini calls.
+ */
+async function runBatches(records) {
+  const batches = chunk(records, BATCH_SIZE);
+  const results = new Array(batches.length);
+  let next = 0;
+
+  const worker = async () => {
+    while (next < batches.length) {
+      const i = next++;
+      results[i] = await generateBatch(batches[i], i + 1, batches.length);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(MAX_CONCURRENT, batches.length) }, worker)
+  );
+
+  const entries       = results.flatMap(r => r.entries);
+  const failedBatches = results.filter(r => !r.ok).length;
+  return { entries, batchCount: batches.length, failedBatches };
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -98,18 +141,6 @@ export default async function handler(req, res) {
   if (dayOfWeek === 6) {
     console.log(`[generate-daily-insights] Shabbat — skipping`);
     return res.json({ message: 'Shabbat — skipped', date: dateKey });
-  }
-
-  // Idempotency: skip if insights for today already exist in KV
-  const redis = Redis.fromEnv();
-  const existingRefs = await redis.get(`date:${dateKey}`);
-  if (existingRefs && existingRefs.length > 0) {
-    const firstKey = refToKvKey(existingRefs[0]);
-    const firstInsight = await redis.get(firstKey);
-    if (firstInsight) {
-      console.log(`[generate-daily-insights] already done for ${dateKey} — skipping`);
-      return res.json({ message: 'already generated', date: dateKey });
-    }
   }
 
   // Fetch parasha calendar from Sefaria
@@ -164,33 +195,57 @@ export default async function handler(req, res) {
 
   console.log(`[generate-daily-insights] ${torahVerses.length} verses, ${verseRefs.length} refs`);
 
-  if (verseRefs.length === 0) {
+  if (verseRefs.filter(Boolean).length === 0) {
     console.error(`[generate-daily-insights] verseRefs empty — Sefaria returned no usable verse data`);
     return res.status(500).json({ error: 'verseRefs empty — cannot store insights by verse', aliyahRefs });
   }
 
-  // Generate insights via Gemini
-  const insights = await generateInsights(aliyahRefs.join(', '), torahVerses, combined);
-  const insightsByIndex = insights.insights || {};
+  const allRecords = buildVerseRecords(verseRefs, torahVerses, combined);
 
-  // Store in KV: one key per verse + date→verseRefs index
-  const pipeline = redis.pipeline();
-  let savedCount = 0;
+  // Gap-fill: only generate for verses that aren't already in KV. This is what
+  // lets the 6:00 and 8:00 crons finish what a timed-out 4:00 run started.
+  const redis    = Redis.fromEnv();
+  const existing = allRecords.length
+    ? await redis.mget(...allRecords.map(r => refToKvKey(r.ref)))
+    : [];
+  const records = allRecords.filter((_, i) => existing[i] == null);
 
-  for (const [idxStr, verseInsights] of Object.entries(insightsByIndex)) {
-    const verseRef = verseRefs[parseInt(idxStr, 10)];
-    if (!verseRef) continue;
-    pipeline.setnx(refToKvKey(verseRef), verseInsights);
-    savedCount++;
+  console.log(`[generate-daily-insights] ${allRecords.length} verses with commentary, ${records.length} missing from KV`);
+
+  if (records.length === 0) {
+    console.log(`[generate-daily-insights] all verses already generated — skipping`);
+    return res.json({ message: 'already generated', date: dateKey, refs: aliyahRefs });
   }
 
-  // Store date→verseRefs so daily-insights can look up KV keys by date
-  pipeline.set(`date:${dateKey}`, verseRefs);
+  const { entries, batchCount, failedBatches } = await runBatches(records);
 
-  console.log(`[generate-daily-insights] writing ${savedCount} verse insights + date index to KV...`);
-  const t3 = Date.now();
-  await pipeline.exec();
-  console.log(`[generate-daily-insights] KV write done (${Date.now() - t3}ms) — total=${Date.now() - start}ms`);
+  // Store in KV: one key per verse, keyed by book:chapter:verse.
+  // setnx so the first good result wins and a later cron only fills holes;
+  // empty results are never written, so a gem-less verse stays retryable.
+  const pipeline = redis.pipeline();
+  let saved = 0;
+  for (const { ref, pearls } of entries) {
+    if (!pearls.length) continue;
+    pipeline.setnx(refToKvKey(ref), pearls);
+    saved++;
+  }
 
-  return res.json({ success: true, date: dateKey, refs: aliyahRefs, savedCount });
+  if (saved > 0) {
+    console.log(`[generate-daily-insights] writing ${saved} verse insights to KV...`);
+    const t3 = Date.now();
+    await pipeline.exec();
+    console.log(`[generate-daily-insights] KV write done (${Date.now() - t3}ms)`);
+  }
+
+  console.log(`[generate-daily-insights] done — batches=${batchCount} failed=${failedBatches} saved=${saved} total=${Date.now() - start}ms`);
+
+  return res.json({
+    success: true,
+    date: dateKey,
+    refs: aliyahRefs,
+    attempted: records.length,
+    batches: batchCount,
+    failedBatches,
+    saved,
+  });
 }

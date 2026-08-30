@@ -1,23 +1,32 @@
-// GET /api/daily-insights
-// Returns pre-generated insights for a date (Jerusalem date by default).
-// Reads verseRefs from KV date index, then batch-fetches verse insights.
+// GET /api/daily-insights?refs=Genesis 12:1,Genesis 12:2
+// Returns pre-generated insights keyed by verse ref:
+//   { "insights": { "Genesis 12:1": [ {commentator, insight}, … ] } }
+// Refs with no stored insights are simply omitted.
 
 import { Redis } from '@upstash/redis';
 import { refToKvKey } from './_sefaria.js';
 
-function getJerusalemDateKey() {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jerusalem',
-  }).format(new Date());
-}
+const MAX_REFS  = 200;
+// Book names may be multi-word and carry apostrophes/periods ("I Samuel",
+// "Song of Songs"), followed by chapter:verse.
+const REF_REGEX = /^[A-Za-z'’. ]{1,60} \d{1,3}:\d{1,3}$/;
 
-function resolveDateKey(req) {
+function parseRefsParam(req) {
+  let raw = '';
   try {
     const url = new URL(req.url, 'https://mikra.local');
-    const requested = url.searchParams.get('date') || '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(requested)) return requested;
-  } catch {}
-  return getJerusalemDateKey();
+    raw = url.searchParams.get('refs') || '';
+  } catch {
+    return [];
+  }
+
+  const seen = new Set();
+  for (const part of raw.split(',')) {
+    const ref = part.trim();
+    if (ref && REF_REGEX.test(ref)) seen.add(ref);
+    if (seen.size >= MAX_REFS) break;
+  }
+  return [...seen];
 }
 
 export default async function handler(req, res) {
@@ -36,22 +45,19 @@ export default async function handler(req, res) {
 
   res.setHeader('Cache-Control', 'no-store, max-age=0');
 
-  const dateKey = resolveDateKey(req);
-  const redis = Redis.fromEnv();
-
-  const verseRefs = await redis.get(`date:${dateKey}`);
-  if (!verseRefs || verseRefs.length === 0) {
-    return res.status(200).json({ insights: {} });
+  const refs = parseRefsParam(req);
+  if (refs.length === 0) {
+    return res.status(400).json({ error: 'refs query parameter is required (e.g. ?refs=Genesis 12:1,Genesis 12:2)' });
   }
 
-  const kvKeys = verseRefs.map(refToKvKey);
-  const values = await redis.mget(...kvKeys);
+  const redis  = Redis.fromEnv();
+  const values = await redis.mget(...refs.map(refToKvKey));
 
-  const insightsObj = {};
+  const insights = {};
   values.forEach((val, idx) => {
-    if (val != null) insightsObj[String(idx)] = val;
+    if (val != null) insights[refs[idx]] = val;
   });
 
   res.setHeader('Content-Type', 'application/json');
-  return res.status(200).json({ insights: insightsObj });
+  return res.status(200).json({ insights });
 }
