@@ -145,6 +145,10 @@ Tasks derived from the PRD. Each task lists the responsible agent skill.
 - [x] `GET /api/daily-insights?refs=…` returns insights keyed by ref; validates, dedupes and caps refs
 - [x] `app.js`: derive verse refs client-side, tag each `.verse-triplet` with `data-verse-ref`, look up gems by ref
 - [x] Delete the unused `api/insights.js`
+- [x] Persist each batch as it completes, under a 48s deadline, so one slow batch can't discard the rest
+- [x] Namespace KV keys to `insights:v2` so legacy positional values are regenerated
+- [x] Reduce to a single daily cron (04:00 UTC)
+- [x] Add a `צור פנינים` retry button to the fallback, guarded by a per-day cap and a run lock
 
 ### 12. Security Review — Insights Feature
 **Agent:** `security`

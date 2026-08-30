@@ -424,11 +424,69 @@ async function render() {
   }
 }
 
-function renderInsightsFallbackMessage(containerEl, message) {
+/**
+ * Show why the פנינים aren't here, optionally with a button that generates
+ * them on demand. Only one cron run happens per day, so the button is the
+ * recovery path when that run failed or only got part way.
+ */
+function renderInsightsFallbackMessage(containerEl, message, { canRetry = false } = {}) {
   const fallback = document.createElement('div');
   fallback.className = 'insights-fallback';
-  fallback.textContent = message;
+
+  const text = document.createElement('p');
+  text.className = 'insights-fallback-text';
+  text.textContent = message;
+  fallback.appendChild(text);
+
+  if (canRetry) {
+    fallback.appendChild(buildInsightsRetryButton(containerEl, fallback, text));
+  }
+
   containerEl.appendChild(fallback);
+}
+
+function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'insights-retry';
+  button.textContent = 'צור פנינים';
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    textEl.textContent = 'מייצר פנינים… הפעולה עשויה לקחת עד דקה.';
+
+    let failure = null;
+    try {
+      // Generation runs to a ~48s deadline server-side; allow for the round trip.
+      const res = await fetch('/api/generate-daily-insights', {
+        method: 'POST',
+        signal: AbortSignal.timeout(90000),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        failure = data.error === 'already running'
+          ? 'הייצור כבר רץ ברקע. נסה שוב בעוד רגע.'
+          : data.error === 'daily limit reached'
+            ? 'הגעת למכסת הניסיונות להיום.'
+            : 'לא הצלחנו לייצר פנינים כרגע.';
+      }
+    } catch {
+      failure = 'לא הצלחנו לייצר פנינים כרגע.';
+    }
+
+    if (failure) {
+      textEl.textContent = failure;
+      button.disabled = false;
+      return;
+    }
+
+    // A partial run still leaves gems worth showing, so re-read either way.
+    fallbackEl.remove();
+    await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true });
+  });
+
+  return button;
 }
 
 /**
@@ -451,7 +509,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     const res = await fetch(`/api/daily-insights?refs=${encodeURIComponent(refs.join(','))}`, { cache: 'no-store' });
     if (!res.ok) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
       }
       return { status: 'error', reason: `HTTP ${res.status}` };
     }
@@ -459,7 +517,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     const data = await res.json();
     if (!data.insights || Object.keys(data.insights).length === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.');
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.', { canRetry: true });
       }
       return { status: 'empty', reason: 'no insights' };
     }
@@ -512,7 +570,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
 
     if (renderedCount === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.');
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.', { canRetry: true });
       }
       return { status: 'empty', reason: 'no rendered insights' };
     }
@@ -520,7 +578,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     return { status: 'loaded', renderedCount };
   } catch {
     if (showFallbackMessage) {
-      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.');
+      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
     }
     return { status: 'error', reason: 'fetch failed' };
   }

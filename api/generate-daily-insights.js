@@ -161,30 +161,82 @@ async function persistEntries(redis, entries) {
   return withPearls.length;
 }
 
+// ─── Manual (retry-button) guards ─────────────────────────────────────────────
+
+// A manual run spends Gemini quota, so it is bounded two ways: one run at a
+// time, and a per-day ceiling. Neither applies to the cron, which authenticates
+// with CRON_SECRET. Gap-filling means a manual run costs nothing once the day
+// is complete — it makes zero Gemini calls and returns "already generated".
+const MANUAL_RUNS_PER_DAY = 10;
+const LOCK_TTL_SECONDS    = 120;
+const MANUAL_COUNTER_TTL  = 172800;   // 48h — long enough to outlive the day
+
+async function claimManualRun(redis, dateKey) {
+  const countKey = `manual:${dateKey}`;
+  const count = await redis.incr(countKey);
+  if (count === 1) await redis.expire(countKey, MANUAL_COUNTER_TTL);
+  if (count > MANUAL_RUNS_PER_DAY) {
+    return { ok: false, status: 429, error: 'daily limit reached' };
+  }
+
+  const lockKey = `lock:generate:${dateKey}`;
+  const locked = await redis.set(lockKey, '1', { nx: true, ex: LOCK_TTL_SECONDS });
+  if (locked !== 'OK') {
+    return { ok: false, status: 409, error: 'already running' };
+  }
+
+  return { ok: true, lockKey };
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
+  const start = Date.now();
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  // Cron mode requires the secret. Anything else is a manual run from the
+  // retry button and goes through the rate guards below. When CRON_SECRET is
+  // unset every request is treated as manual, so the endpoint is never
+  // unguarded.
+  const isCron = !!cronSecret && req.headers['authorization'] === `Bearer ${cronSecret}`;
+
+  if (!isCron && req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const start = Date.now();
   const { weekday, year, month, day } = getJerusalemParts();
   const dateKey  = `${year}-${month}-${day}`;
   const dayMap   = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
   const dayOfWeek = dayMap[weekday];
 
-  console.log(`[generate-daily-insights] start — date=${dateKey} weekday=${weekday}`);
+  console.log(`[generate-daily-insights] start — date=${dateKey} weekday=${weekday} mode=${isCron ? 'cron' : 'manual'}`);
 
   if (dayOfWeek === 6) {
     console.log(`[generate-daily-insights] Shabbat — skipping`);
     return res.json({ message: 'Shabbat — skipped', date: dateKey });
   }
 
+  const redis = Redis.fromEnv();
+
+  // Claimed before any Gemini work, released in the finally below.
+  let lockKey = null;
+  if (!isCron) {
+    const claim = await claimManualRun(redis, dateKey);
+    if (!claim.ok) {
+      console.log(`[generate-daily-insights] manual run refused — ${claim.error}`);
+      return res.status(claim.status).json({ error: claim.error, date: dateKey });
+    }
+    lockKey = claim.lockKey;
+  }
+
+  try {
+    return await generate({ req, res, redis, start, dateKey, dayOfWeek });
+  } finally {
+    if (lockKey) await redis.del(lockKey).catch(() => {});
+  }
+}
+
+async function generate({ res, redis, start, dateKey, dayOfWeek }) {
   // Fetch parasha calendar from Sefaria
   console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
   const t1 = Date.now();
@@ -246,7 +298,6 @@ export default async function handler(req, res) {
 
   // Gap-fill: only generate for verses that aren't already in KV. This is what
   // lets the 6:00 and 8:00 crons finish what a timed-out 4:00 run started.
-  const redis    = Redis.fromEnv();
   const existing = allRecords.length
     ? await redis.mget(...allRecords.map(r => refToKvKey(r.ref)))
     : [];

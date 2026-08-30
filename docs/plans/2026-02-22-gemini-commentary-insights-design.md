@@ -258,3 +258,32 @@ mirror of the one in `api/_sefaria.js` (app.js is a classic script and cannot
 import from `api/`). Every `.verse-triplet` carries `data-verse-ref`, and
 `loadPreGeneratedInsights()` requests exactly those refs and looks up each gem by
 ref — no index arithmetic anywhere in the path.
+
+## Follow-up — single cron plus a retry button
+
+Three crons (04:00/06:00/08:00 UTC) existed to give a failed run two more
+chances. With incremental persistence and gap-filling, the extra runs are
+replaced by a reader-triggered retry:
+
+- `vercel.json` runs **one** cron, 04:00 UTC (07:00 Jerusalem).
+- When there are no פנינים to show, the fallback carries a **צור פנינים**
+  button that `POST`s to `/api/generate-daily-insights`, then re-reads and
+  renders whatever was produced.
+
+`/api/generate-daily-insights` now has two modes:
+
+| Mode | Trigger | Guards |
+|---|---|---|
+| cron | `Authorization: Bearer $CRON_SECRET` | none |
+| manual | any other request | `POST` only, one run at a time, capped per day |
+
+Manual runs are bounded because they spend Gemini quota: a `lock:generate:{date}`
+key held with `SET NX EX 120` serialises them (a second click gets 409
+`already running`), and `manual:{date}` counts them against
+`MANUAL_RUNS_PER_DAY` (429 `daily limit reached`). The lock is released in a
+`finally`, so a failed run stays retryable. When `CRON_SECRET` is unset every
+request is treated as manual, so the endpoint is never unguarded.
+
+Gap-filling keeps the button cheap: once the day is complete a manual run makes
+zero Gemini calls and returns `already generated`, and after a partial run it
+only generates the verses still missing.
