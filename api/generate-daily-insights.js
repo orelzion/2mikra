@@ -29,6 +29,12 @@ export const config = {
 // ─── Gemini ───────────────────────────────────────────────────────────────────
 
 const GEMINI_TIMEOUT_MS = 25000;
+// The function's maxDuration is 60s. Stop starting Gemini work at 48s so there
+// is always room to finish the in-flight batch's KV write and answer the
+// request; whatever is left over is picked up by the next cron's gap-fill.
+const BATCH_DEADLINE_MS = 48000;
+// Not worth starting an attempt that cannot plausibly finish.
+const MIN_ATTEMPT_MS = 5000;
 
 function isRetryable(status) {
   return status === 429 || status >= 500;
@@ -40,7 +46,7 @@ function isRetryable(status) {
  * from a batch that succeeded but found no gems. A single bad batch must not
  * sink the whole day, so failures are reported, never thrown.
  */
-async function generateBatch(records, batchNum, totalBatches) {
+async function generateBatch(records, batchNum, totalBatches, deadline) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
@@ -49,6 +55,12 @@ async function generateBatch(records, batchNum, totalBatches) {
   console.log(`[generate-daily-insights] ${label}: ${records.length} verses, ${userPrompt.length} chars (${records[0].ref}…${records[records.length - 1].ref})`);
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_ATTEMPT_MS) {
+      console.warn(`[generate-daily-insights] ${label}: ${remaining}ms left before deadline — not attempting`);
+      return { ok: false, entries: [] };
+    }
+
     const t = Date.now();
     try {
       const response = await fetch(
@@ -56,7 +68,7 @@ async function generateBatch(records, batchNum, totalBatches) {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+          signal: AbortSignal.timeout(Math.min(GEMINI_TIMEOUT_MS, remaining)),
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
             contents: [{ parts: [{ text: userPrompt }] }],
@@ -97,16 +109,30 @@ async function generateBatch(records, batchNum, totalBatches) {
 /**
  * Run the batches through a bounded worker pool so a long parasha can't fire
  * a dozen simultaneous Gemini calls.
+ *
+ * Each batch is persisted the moment it completes rather than after the whole
+ * pool settles: one slow batch (up to two 25s attempts) can otherwise run the
+ * invocation past maxDuration and take every already-finished batch down with
+ * it, which is exactly the all-or-nothing failure this change exists to remove.
  */
-async function runBatches(records) {
+async function runBatches(records, deadline, persist) {
   const batches = chunk(records, BATCH_SIZE);
   const results = new Array(batches.length);
   let next = 0;
+  let saved = 0;
 
   const worker = async () => {
     while (next < batches.length) {
+      if (Date.now() >= deadline) break;   // leave the rest to the next cron
       const i = next++;
-      results[i] = await generateBatch(batches[i], i + 1, batches.length);
+      const result = await generateBatch(batches[i], i + 1, batches.length, deadline);
+      results[i] = result;
+      if (result.entries.length) {
+        // Read-modify-write of `saved` must happen after the await, not around
+        // it — `saved += await …` would let concurrent workers clobber it.
+        const written = await persist(result.entries);
+        saved += written;
+      }
     }
   };
 
@@ -114,9 +140,25 @@ async function runBatches(records) {
     Array.from({ length: Math.min(MAX_CONCURRENT, batches.length) }, worker)
   );
 
-  const entries       = results.flatMap(r => r.entries);
-  const failedBatches = results.filter(r => !r.ok).length;
-  return { entries, batchCount: batches.length, failedBatches };
+  const done           = results.filter(Boolean);
+  const failedBatches  = done.filter(r => !r.ok).length;
+  const skippedBatches = batches.length - done.length;
+  return { batchCount: batches.length, failedBatches, skippedBatches, saved };
+}
+
+/**
+ * Write one batch's gems. setnx so the first good result wins and a later cron
+ * only fills holes; empty results are never written, so a verse with no gems
+ * stays retryable rather than being locked in as empty.
+ */
+async function persistEntries(redis, entries) {
+  const withPearls = entries.filter(e => e.pearls.length);
+  if (withPearls.length === 0) return 0;
+
+  const pipeline = redis.pipeline();
+  for (const { ref, pearls } of withPearls) pipeline.setnx(refToKvKey(ref), pearls);
+  await pipeline.exec();
+  return withPearls.length;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -217,27 +259,13 @@ export default async function handler(req, res) {
     return res.json({ message: 'already generated', date: dateKey, refs: aliyahRefs });
   }
 
-  const { entries, batchCount, failedBatches } = await runBatches(records);
+  const { batchCount, failedBatches, skippedBatches, saved } = await runBatches(
+    records,
+    start + BATCH_DEADLINE_MS,
+    (entries) => persistEntries(redis, entries),
+  );
 
-  // Store in KV: one key per verse, keyed by book:chapter:verse.
-  // setnx so the first good result wins and a later cron only fills holes;
-  // empty results are never written, so a gem-less verse stays retryable.
-  const pipeline = redis.pipeline();
-  let saved = 0;
-  for (const { ref, pearls } of entries) {
-    if (!pearls.length) continue;
-    pipeline.setnx(refToKvKey(ref), pearls);
-    saved++;
-  }
-
-  if (saved > 0) {
-    console.log(`[generate-daily-insights] writing ${saved} verse insights to KV...`);
-    const t3 = Date.now();
-    await pipeline.exec();
-    console.log(`[generate-daily-insights] KV write done (${Date.now() - t3}ms)`);
-  }
-
-  console.log(`[generate-daily-insights] done — batches=${batchCount} failed=${failedBatches} saved=${saved} total=${Date.now() - start}ms`);
+  console.log(`[generate-daily-insights] done — batches=${batchCount} failed=${failedBatches} skipped=${skippedBatches} saved=${saved} total=${Date.now() - start}ms`);
 
   return res.json({
     success: true,
@@ -246,6 +274,7 @@ export default async function handler(req, res) {
     attempted: records.length,
     batches: batchCount,
     failedBatches,
+    skippedBatches,
     saved,
   });
 }
