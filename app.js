@@ -25,20 +25,68 @@ const BASE_URL = 'https://www.sefaria.org';
 // ─── Date / Aliyah Logic ─────────────────────────────────────────────────────
 
 /**
- * Returns the current weekday in Jerusalem (midnight-based, not halachic sunset).
- * Uses Intl.DateTimeFormat to avoid relying on the user's local timezone.
+ * Returns the weekday in Jerusalem (midnight-based, not halachic sunset) for a
+ * given moment. Uses Intl.DateTimeFormat to avoid relying on the user's local
+ * timezone.
+ * @param {Date} [date] Defaults to now.
  * @returns {number} 0=Sunday … 6=Saturday
  */
-function getJerusalemDayOfWeek() {
-  const now = new Date();
+function getJerusalemDayOfWeek(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Jerusalem',
     weekday: 'long',
-  }).formatToParts(now);
+  }).formatToParts(date);
   const weekday = parts.find(p => p.type === 'weekday').value;
   const map = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
   return map[weekday];
 }
+
+/**
+ * Returns the Jerusalem calendar date (Gregorian y/m/d) for a given moment.
+ */
+function getJerusalemDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  return {
+    year:  parts.find(p => p.type === 'year').value,
+    month: parts.find(p => p.type === 'month').value,
+    day:   parts.find(p => p.type === 'day').value,
+  };
+}
+
+/**
+ * A Date anchored at noon UTC on a given Jerusalem calendar day. Noon UTC is
+ * always mid-afternoon in Jerusalem, so it can never round to the wrong
+ * calendar day there — which makes it safe to shift by whole days with
+ * setUTCDate and re-derive the weekday/date parts without DST edge cases.
+ */
+function jerusalemAnchor({ year, month, day }) {
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12));
+}
+
+function jerusalemTodayAnchor() {
+  return jerusalemAnchor(getJerusalemDateParts(new Date()));
+}
+
+function shiftAnchorDays(anchor, delta) {
+  const next = new Date(anchor);
+  next.setUTCDate(next.getUTCDate() + delta);
+  return next;
+}
+
+function isSameJerusalemDay(a, b) {
+  const pa = getJerusalemDateParts(a);
+  const pb = getJerusalemDateParts(b);
+  return pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
+}
+
+// The day currently being viewed. Defaults to today; the back/next controls
+// move it a day at a time and trigger a full re-render.
+let viewAnchor = jerusalemTodayAnchor();
 
 // Maps Jerusalem weekday → aliyah array index/indices.
 // Friday base is [5, 6], with Maftir (7) appended when available in source aliyot.
@@ -98,14 +146,25 @@ function buildOnkelosRef(ref) {
 
 // ─── Sefaria API ──────────────────────────────────────────────────────────────
 
-async function fetchCalendar() {
-  const res = await fetch(`${BASE_URL}/api/calendars?diaspora=0`);
+/**
+ * @param {{year: string, month: string, day: string}} [dateParts] Explicit
+ *   Gregorian date to fetch the calendar for. Omitted for "today", matching
+ *   the endpoint's own default and preserving existing behavior exactly.
+ */
+async function fetchCalendar(dateParts = null) {
+  const params = new URLSearchParams({ diaspora: '0' });
+  if (dateParts) {
+    params.set('year', dateParts.year);
+    params.set('month', dateParts.month);
+    params.set('day', dateParts.day);
+  }
+  const res = await fetch(`${BASE_URL}/api/calendars?${params.toString()}`);
   if (!res.ok) throw new Error(`Calendar HTTP ${res.status}`);
   return res.json();
 }
 
-async function getCurrentWeekParashat() {
-  const calendar = await fetchCalendar();
+async function getCurrentWeekParashat(dateParts = null) {
+  const calendar = await fetchCalendar(dateParts);
   const item = (calendar.calendar_items || []).find(
     i => i.title && i.title.en === 'Parashat Hashavua'
   );
@@ -348,88 +407,119 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
 
 // ─── Main Render ──────────────────────────────────────────────────────────────
 
+function updateDateNav() {
+  const labelEl = document.getElementById('date-nav-label');
+  if (!labelEl) return;
+  const isToday = isSameJerusalemDay(viewAnchor, new Date());
+  labelEl.textContent = isToday
+    ? 'היום'
+    : new Intl.DateTimeFormat('he-IL', {
+        timeZone: 'Asia/Jerusalem',
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      }).format(viewAnchor);
+}
+
+function setDateNavDisabled(disabled) {
+  const prevBtn = document.getElementById('date-prev');
+  const nextBtn = document.getElementById('date-next');
+  if (prevBtn) prevBtn.disabled = disabled;
+  if (nextBtn) nextBtn.disabled = disabled;
+}
+
 async function render() {
   const parashaNameEl = document.getElementById('parasha-name');
   const aliyahNameEl  = document.getElementById('aliyah-name');
   const containerEl   = document.getElementById('content-container');
 
-  const dayOfWeek = getJerusalemDayOfWeek();
+  updateDateNav();
 
-  // Saturday — Shabbat rest screen
-  if (dayOfWeek === 6) {
-    parashaNameEl.textContent = 'שבת שלום';
-    aliyahNameEl.textContent  = '';
-    containerEl.innerHTML     = '';
-    const msg = document.createElement('div');
-    msg.className   = 'shabbat-message';
-    msg.textContent = 'שַׁבָּת שָׁלוֹם';
-    containerEl.appendChild(msg);
-    return;
-  }
+  const isToday    = isSameJerusalemDay(viewAnchor, new Date());
+  const dateParts  = isToday ? null : getJerusalemDateParts(viewAnchor);
+  const dayOfWeek  = getJerusalemDayOfWeek(viewAnchor);
 
-  containerEl.innerHTML = '<div class="loading">טוען טקסטים…</div>';
-
+  setDateNavDisabled(true);
   try {
-    const parashat = await getCurrentWeekParashat();
-    if (!parashat) {
-      containerEl.innerHTML = '';
-      const err = document.createElement('div');
-      err.className   = 'error';
-      err.textContent = 'לא נמצאה פרשת השבוע';
-      containerEl.appendChild(err);
+    // Saturday — Shabbat rest screen
+    if (dayOfWeek === 6) {
+      parashaNameEl.textContent = 'שבת שלום';
+      aliyahNameEl.textContent  = '';
+      containerEl.innerHTML     = '';
+      const msg = document.createElement('div');
+      msg.className   = 'shabbat-message';
+      msg.textContent = 'שַׁבָּת שָׁלוֹם';
+      containerEl.appendChild(msg);
       return;
     }
 
-    parashaNameEl.textContent = parashat.name;
+    containerEl.innerHTML = '<div class="loading">טוען טקסטים…</div>';
 
-    const aliyahSections = getAliyahSectionsForDay(dayOfWeek, parashat.aliyot);
+    try {
+      const parashat = await getCurrentWeekParashat(dateParts);
+      if (!parashat) {
+        containerEl.innerHTML = '';
+        const err = document.createElement('div');
+        err.className   = 'error';
+        err.textContent = 'לא נמצאה פרשת השבוע';
+        containerEl.appendChild(err);
+        return;
+      }
 
-    if (aliyahSections.length === 0) {
+      parashaNameEl.textContent = parashat.name;
+
+      const aliyahSections = getAliyahSectionsForDay(dayOfWeek, parashat.aliyot);
+
+      if (aliyahSections.length === 0) {
+        containerEl.innerHTML = '';
+        const err = document.createElement('div');
+        err.className = 'error';
+        err.textContent = 'לא נמצאו עליות זמינות להיום';
+        containerEl.appendChild(err);
+        return;
+      }
+
+      aliyahNameEl.textContent = aliyahSections.map(section => section.shortLabel).join(' · ');
+
+      // Fetch all needed aliyot in parallel
+      const aliyahRefs = aliyahSections.map(section => section.ref);
+      const allTexts   = await Promise.all(aliyahRefs.map(fetchAliyahTexts));
+
       containerEl.innerHTML = '';
-      const err = document.createElement('div');
-      err.className = 'error';
-      err.textContent = 'לא נמצאו עליות זמינות להיום';
-      containerEl.appendChild(err);
-      return;
+
+      allTexts.forEach((texts, pos) => {
+        const section = aliyahSections[pos];
+
+        containerEl.appendChild(createSectionSeparator(section.sectionLabel));
+
+        const groupEl = buildVerseGroupEl(texts);
+        containerEl.appendChild(groupEl);
+      });
+
+      const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true, dateParts });
+      if (insightsStatus.status === 'error') {
+        console.warn('[insights] unavailable:', insightsStatus.reason || 'unknown');
+      }
+
+    } catch (err) {
+      containerEl.innerHTML = '';
+      const errEl = document.createElement('div');
+      errEl.className   = 'error';
+      errEl.textContent = 'שגיאה בטעינת הטקסטים';
+      containerEl.appendChild(errEl);
     }
-
-    aliyahNameEl.textContent = aliyahSections.map(section => section.shortLabel).join(' · ');
-
-    // Fetch all needed aliyot in parallel
-    const aliyahRefs = aliyahSections.map(section => section.ref);
-    const allTexts   = await Promise.all(aliyahRefs.map(fetchAliyahTexts));
-
-    containerEl.innerHTML = '';
-
-    allTexts.forEach((texts, pos) => {
-      const section = aliyahSections[pos];
-
-      containerEl.appendChild(createSectionSeparator(section.sectionLabel));
-
-      const groupEl = buildVerseGroupEl(texts);
-      containerEl.appendChild(groupEl);
-    });
-
-    const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true });
-    if (insightsStatus.status === 'error') {
-      console.warn('[insights] unavailable:', insightsStatus.reason || 'unknown');
-    }
-
-  } catch (err) {
-    containerEl.innerHTML = '';
-    const errEl = document.createElement('div');
-    errEl.className   = 'error';
-    errEl.textContent = 'שגיאה בטעינת הטקסטים';
-    containerEl.appendChild(errEl);
+  } finally {
+    setDateNavDisabled(false);
   }
 }
 
 /**
  * Show why the פנינים aren't here, optionally with a button that generates
- * them on demand. Only one cron run happens per day, so the button is the
- * recovery path when that run failed or only got part way.
+ * them on demand. There is no cron anymore, so this button is the only way
+ * to generate insights — shown at the top of the content so it's the first
+ * thing visible instead of something to scroll past everything to find.
  */
-function renderInsightsFallbackMessage(containerEl, message, { canRetry = false } = {}) {
+function renderInsightsFallbackMessage(containerEl, message, { canRetry = false, dateParts = null } = {}) {
   const fallback = document.createElement('div');
   fallback.className = 'insights-fallback';
 
@@ -439,13 +529,13 @@ function renderInsightsFallbackMessage(containerEl, message, { canRetry = false 
   fallback.appendChild(text);
 
   if (canRetry) {
-    fallback.appendChild(buildInsightsRetryButton(containerEl, fallback, text));
+    fallback.appendChild(buildInsightsRetryButton(containerEl, fallback, text, dateParts));
   }
 
-  containerEl.appendChild(fallback);
+  containerEl.prepend(fallback);
 }
 
-function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
+function buildInsightsRetryButton(containerEl, fallbackEl, textEl, dateParts) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'insights-retry';
@@ -455,10 +545,18 @@ function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
     button.disabled = true;
     textEl.textContent = 'מייצר פנינים… הפעולה עשויה לקחת עד דקה.';
 
+    const params = new URLSearchParams();
+    if (dateParts) {
+      params.set('year', dateParts.year);
+      params.set('month', dateParts.month);
+      params.set('day', dateParts.day);
+    }
+    const url = '/api/generate-daily-insights' + (params.toString() ? `?${params}` : '');
+
     let failure = null;
     try {
       // Generation runs to a ~48s deadline server-side; allow for the round trip.
-      const res = await fetch('/api/generate-daily-insights', {
+      const res = await fetch(url, {
         method: 'POST',
         signal: AbortSignal.timeout(90000),
       });
@@ -483,7 +581,7 @@ function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
 
     // A partial run still leaves gems worth showing, so re-read either way.
     fallbackEl.remove();
-    await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true });
+    await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true, dateParts });
   });
 
   return button;
@@ -493,7 +591,7 @@ function buildInsightsRetryButton(containerEl, fallbackEl, textEl) {
  * Load and render pre-generated insights.
  * @returns {{status: 'loaded'|'empty'|'error', reason?: string, renderedCount?: number}}
  */
-async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = false } = {}) {
+async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = false, dateParts = null } = {}) {
   try {
     const triplets = [...containerEl.querySelectorAll('.verse-triplet')]
       .filter(t => t.dataset.verseRef);
@@ -509,7 +607,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     const res = await fetch(`/api/daily-insights?refs=${encodeURIComponent(refs.join(','))}`, { cache: 'no-store' });
     if (!res.ok) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
+        renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true, dateParts });
       }
       return { status: 'error', reason: `HTTP ${res.status}` };
     }
@@ -517,7 +615,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     const data = await res.json();
     if (!data.insights || Object.keys(data.insights).length === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.', { canRetry: true });
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.', { canRetry: true, dateParts });
       }
       return { status: 'empty', reason: 'no insights' };
     }
@@ -570,7 +668,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
 
     if (renderedCount === 0) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.', { canRetry: true });
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.', { canRetry: true, dateParts });
       }
       return { status: 'empty', reason: 'no rendered insights' };
     }
@@ -578,7 +676,7 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     return { status: 'loaded', renderedCount };
   } catch {
     if (showFallbackMessage) {
-      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true });
+      renderInsightsFallbackMessage(containerEl, 'פנינים אינם זמינים כרגע.', { canRetry: true, dateParts });
     }
     return { status: 'error', reason: 'fetch failed' };
   }
@@ -605,6 +703,17 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   window.addEventListener('scroll', syncCollapsedHeader, { passive: true });
+
+  const prevBtn = document.getElementById('date-prev');
+  const nextBtn = document.getElementById('date-next');
+  prevBtn?.addEventListener('click', () => {
+    viewAnchor = shiftAnchorDays(viewAnchor, -1);
+    render();
+  });
+  nextBtn?.addEventListener('click', () => {
+    viewAnchor = shiftAnchorDays(viewAnchor, 1);
+    render();
+  });
 
   initFontSize();
   syncCollapsedHeader();

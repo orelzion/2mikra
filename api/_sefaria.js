@@ -23,8 +23,16 @@ export function getAliyahRefsForDay(dayOfWeek, aliyot) {
   return indices.map(i => aliyot[i]).filter(Boolean);
 }
 
-export function getJerusalemParts() {
-  const now = new Date();
+/**
+ * @param {{year: number, month: number, day: number}} [explicitDate] Gregorian
+ *   date to compute parts for, instead of the current moment. Anchored at
+ *   noon UTC — always mid-afternoon in Jerusalem, so it can't roll onto the
+ *   adjacent calendar day there.
+ */
+export function getJerusalemParts(explicitDate = null) {
+  const now = explicitDate
+    ? new Date(Date.UTC(explicitDate.year, explicitDate.month - 1, explicitDate.day, 12))
+    : new Date();
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Jerusalem',
     weekday: 'long',

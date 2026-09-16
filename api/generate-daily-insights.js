@@ -1,6 +1,7 @@
-// Vercel Cron Job: runs daily at 4:00am UTC (with 6:00 and 8:00 gap-fill runs).
-// Fetches today's aliyah texts from Sefaria, generates insights via Gemini in
-// small batches, and stores them in Upstash KV — one key per book:chapter:verse.
+// Generates insights for a given day's aliyah on demand, via the "צור פנינים"
+// button — there is no cron anymore. Fetches that day's aliyah texts from
+// Sefaria, generates insights via Gemini in small batches, and stores them in
+// Upstash KV — one key per book:chapter:verse.
 
 import { Redis } from '@upstash/redis';
 import {
@@ -31,7 +32,7 @@ export const config = {
 const GEMINI_TIMEOUT_MS = 25000;
 // The function's maxDuration is 60s. Stop starting Gemini work at 48s so there
 // is always room to finish the in-flight batch's KV write and answer the
-// request; whatever is left over is picked up by the next cron's gap-fill.
+// request; whatever is left over is picked up by the next manual run's gap-fill.
 const BATCH_DEADLINE_MS = 48000;
 // Not worth starting an attempt that cannot plausibly finish.
 const MIN_ATTEMPT_MS = 5000;
@@ -123,7 +124,7 @@ async function runBatches(records, deadline, persist) {
 
   const worker = async () => {
     while (next < batches.length) {
-      if (Date.now() >= deadline) break;   // leave the rest to the next cron
+      if (Date.now() >= deadline) break;   // leave the rest to the next manual run
       const i = next++;
       const result = await generateBatch(batches[i], i + 1, batches.length, deadline);
       results[i] = result;
@@ -147,9 +148,9 @@ async function runBatches(records, deadline, persist) {
 }
 
 /**
- * Write one batch's gems. setnx so the first good result wins and a later cron
- * only fills holes; empty results are never written, so a verse with no gems
- * stays retryable rather than being locked in as empty.
+ * Write one batch's gems. setnx so the first good result wins and a later
+ * manual run only fills holes; empty results are never written, so a verse
+ * with no gems stays retryable rather than being locked in as empty.
  */
 async function persistEntries(redis, entries) {
   const withPearls = entries.filter(e => e.pearls.length);
@@ -188,6 +189,23 @@ async function claimManualRun(redis, dateKey) {
   return { ok: true, lockKey };
 }
 
+// The button sends the Gregorian date (Jerusalem calendar day) it's currently
+// showing, so generation targets whatever day the user is looking at instead
+// of always assuming today. Omitted (or unparseable) falls back to today.
+function parseDateParam(req) {
+  try {
+    const url   = new URL(req.url, 'https://mikra.local');
+    const year  = Number(url.searchParams.get('year'));
+    const month = Number(url.searchParams.get('month'));
+    const day   = Number(url.searchParams.get('day'));
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -204,7 +222,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { weekday, year, month, day } = getJerusalemParts();
+  const explicitDate = isCron ? null : parseDateParam(req);
+  const { weekday, year, month, day } = getJerusalemParts(explicitDate);
   const dateKey  = `${year}-${month}-${day}`;
   const dayMap   = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
   const dayOfWeek = dayMap[weekday];
@@ -230,17 +249,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    return await generate({ req, res, redis, start, dateKey, dayOfWeek });
+    return await generate({ req, res, redis, start, dateKey, dayOfWeek, explicitDate });
   } finally {
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }
 }
 
-async function generate({ res, redis, start, dateKey, dayOfWeek }) {
+async function generate({ res, redis, start, dateKey, dayOfWeek, explicitDate }) {
   // Fetch parasha calendar from Sefaria
   console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
   const t1 = Date.now();
-  const calRes = await fetch('https://www.sefaria.org/api/calendars?diaspora=0');
+  const calParams = new URLSearchParams({ diaspora: '0' });
+  if (explicitDate) {
+    calParams.set('year', String(explicitDate.year));
+    calParams.set('month', String(explicitDate.month));
+    calParams.set('day', String(explicitDate.day));
+  }
+  const calRes = await fetch(`https://www.sefaria.org/api/calendars?${calParams.toString()}`);
   if (!calRes.ok) {
     console.error(`[generate-daily-insights] calendar fetch failed — HTTP ${calRes.status}`);
     return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
