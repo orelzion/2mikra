@@ -1,6 +1,7 @@
-// Vercel Cron Job: runs daily at 4:00am UTC (with 6:00 and 8:00 gap-fill runs).
-// Fetches today's aliyah texts from Sefaria, generates insights via Gemini in
-// small batches, and stores them in Upstash KV — one key per book:chapter:verse.
+// Generates insights for a given day's aliyah on demand, via the "צור פנינים"
+// button — there is no cron anymore. Fetches that day's aliyah texts from
+// Sefaria, generates insights via Gemini in small batches, and stores them in
+// Upstash KV — one key per book:chapter:verse.
 
 import { Redis } from '@upstash/redis';
 import {
@@ -31,7 +32,7 @@ export const config = {
 const GEMINI_TIMEOUT_MS = 25000;
 // The function's maxDuration is 60s. Stop starting Gemini work at 48s so there
 // is always room to finish the in-flight batch's KV write and answer the
-// request; whatever is left over is picked up by the next cron's gap-fill.
+// request; whatever is left over is picked up by the next manual run's gap-fill.
 const BATCH_DEADLINE_MS = 48000;
 // Not worth starting an attempt that cannot plausibly finish.
 const MIN_ATTEMPT_MS = 5000;
@@ -93,7 +94,8 @@ async function generateBatch(records, batchNum, totalBatches, deadline) {
       if (!text) return { ok: true, entries: [] };
 
       const validated = validateBatchResponse(JSON.parse(text), records);
-      console.log(`[generate-daily-insights] ${label}: ${validated.length}/${records.length} verses with gems`);
+      const withGems  = validated.filter(e => e.pearls.length).length;
+      console.log(`[generate-daily-insights] ${label}: ${withGems}/${records.length} verses with gems`);
       return { ok: true, entries: validated };
 
     } catch (err) {
@@ -123,7 +125,7 @@ async function runBatches(records, deadline, persist) {
 
   const worker = async () => {
     while (next < batches.length) {
-      if (Date.now() >= deadline) break;   // leave the rest to the next cron
+      if (Date.now() >= deadline) break;   // leave the rest to the next manual run
       const i = next++;
       const result = await generateBatch(batches[i], i + 1, batches.length, deadline);
       results[i] = result;
@@ -147,32 +149,38 @@ async function runBatches(records, deadline, persist) {
 }
 
 /**
- * Write one batch's gems. setnx so the first good result wins and a later cron
- * only fills holes; empty results are never written, so a verse with no gems
- * stays retryable rather than being locked in as empty.
+ * Write every verse in the batch, gems or not. setnx so the first result
+ * wins. A verse the model legitimately found nothing on is still written as
+ * an empty array — it's "attempted", which is what lets the client tell
+ * "generated, no gems" apart from "never generated" and only offer a retry
+ * for the latter. Returns the count that actually had gems, for logging.
  */
 async function persistEntries(redis, entries) {
-  const withPearls = entries.filter(e => e.pearls.length);
-  if (withPearls.length === 0) return 0;
+  if (entries.length === 0) return 0;
 
   const pipeline = redis.pipeline();
-  for (const { ref, pearls } of withPearls) pipeline.setnx(refToKvKey(ref), pearls);
+  for (const { ref, pearls } of entries) pipeline.setnx(refToKvKey(ref), pearls);
   await pipeline.exec();
-  return withPearls.length;
+  return entries.filter(e => e.pearls.length).length;
 }
 
 // ─── Manual (retry-button) guards ─────────────────────────────────────────────
 
 // A manual run spends Gemini quota, so it is bounded two ways: one run at a
-// time, and a per-day ceiling. Neither applies to the cron, which authenticates
-// with CRON_SECRET. Gap-filling means a manual run costs nothing once the day
-// is complete — it makes zero Gemini calls and returns "already generated".
+// time per target date, and a per-real-day ceiling across ALL target dates.
+// The quota is keyed to the caller's actual current day (server-computed,
+// never from the request), not the requested date — otherwise an
+// unauthenticated caller could get 10 fresh attempts just by requesting a
+// different date each time. Neither guard applies to the cron, which
+// authenticates with CRON_SECRET. Gap-filling means a manual run costs
+// nothing once a date is complete — it makes zero Gemini calls and returns
+// "already generated".
 const MANUAL_RUNS_PER_DAY = 10;
 const LOCK_TTL_SECONDS    = 120;
 const MANUAL_COUNTER_TTL  = 172800;   // 48h — long enough to outlive the day
 
-async function claimManualRun(redis, dateKey) {
-  const countKey = `manual:${dateKey}`;
+async function claimManualRun(redis, dateKey, quotaKey) {
+  const countKey = `manual:${quotaKey}`;
   const count = await redis.incr(countKey);
   if (count === 1) await redis.expire(countKey, MANUAL_COUNTER_TTL);
   if (count > MANUAL_RUNS_PER_DAY) {
@@ -186,6 +194,23 @@ async function claimManualRun(redis, dateKey) {
   }
 
   return { ok: true, lockKey };
+}
+
+// The button sends the Gregorian date (Jerusalem calendar day) it's currently
+// showing, so generation targets whatever day the user is looking at instead
+// of always assuming today. Omitted (or unparseable) falls back to today.
+function parseDateParam(req) {
+  try {
+    const url   = new URL(req.url, 'https://mikra.local');
+    const year  = Number(url.searchParams.get('year'));
+    const month = Number(url.searchParams.get('month'));
+    const day   = Number(url.searchParams.get('day'));
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { year, month, day };
+  } catch {
+    return null;
+  }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -204,7 +229,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { weekday, year, month, day } = getJerusalemParts();
+  const explicitDate = isCron ? null : parseDateParam(req);
+  const { weekday, year, month, day } = getJerusalemParts(explicitDate);
   const dateKey  = `${year}-${month}-${day}`;
   const dayMap   = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
   const dayOfWeek = dayMap[weekday];
@@ -221,7 +247,10 @@ export default async function handler(req, res) {
   // Claimed before any Gemini work, released in the finally below.
   let lockKey = null;
   if (!isCron) {
-    const claim = await claimManualRun(redis, dateKey);
+    // Caller-independent: the real current day, never the requested one.
+    const today     = getJerusalemParts();
+    const quotaKey  = `${today.year}-${today.month}-${today.day}`;
+    const claim = await claimManualRun(redis, dateKey, quotaKey);
     if (!claim.ok) {
       console.log(`[generate-daily-insights] manual run refused — ${claim.error}`);
       return res.status(claim.status).json({ error: claim.error, date: dateKey });
@@ -230,17 +259,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    return await generate({ req, res, redis, start, dateKey, dayOfWeek });
+    return await generate({ req, res, redis, start, dateKey, dayOfWeek, explicitDate });
   } finally {
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }
 }
 
-async function generate({ res, redis, start, dateKey, dayOfWeek }) {
+async function generate({ res, redis, start, dateKey, dayOfWeek, explicitDate }) {
   // Fetch parasha calendar from Sefaria
   console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
   const t1 = Date.now();
-  const calRes = await fetch('https://www.sefaria.org/api/calendars?diaspora=0');
+  const calParams = new URLSearchParams({ diaspora: '0' });
+  if (explicitDate) {
+    calParams.set('year', String(explicitDate.year));
+    calParams.set('month', String(explicitDate.month));
+    calParams.set('day', String(explicitDate.day));
+  }
+  const calRes = await fetch(`https://www.sefaria.org/api/calendars?${calParams.toString()}`);
   if (!calRes.ok) {
     console.error(`[generate-daily-insights] calendar fetch failed — HTTP ${calRes.status}`);
     return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
