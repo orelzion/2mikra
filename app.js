@@ -89,10 +89,7 @@ function isSameJerusalemDay(a, b) {
 let viewAnchor = jerusalemTodayAnchor();
 
 // Maps Jerusalem weekday → aliyah array index/indices.
-// Saturday returns null (Shabbat rest screen). Maftir is not a separate
-// aliyah — on an ordinary week it re-reads the tail of שביעי from the same
-// scroll, so it's only marked in place within שביעי's verses (see
-// buildMaftirMarkerEl / getMaftirStartRef), never fetched on its own.
+// Saturday returns null (Shabbat rest screen).
 const DAY_TO_ALIYAH = {
   0: 0,       // Sunday    → 1st aliyah
   1: 1,       // Monday    → 2nd aliyah
@@ -134,17 +131,6 @@ function convertRefFormat(ref) {
     .replace(/:/g, '.');         // colons → dots
     // Note: book names with internal spaces (e.g. "I Samuel") are already handled
     // because the pattern above only replaces spaces directly before a digit.
-}
-
-/**
- * Extracts the first "Book Chapter:Verse" from a (possibly ranged) Sefaria
- * ref, e.g. "Exodus 27:20-28:12" → "Exodus 27:20". Used to locate where
- * aliyot[7] (Maftir) actually starts among the already-rendered שביעי
- * verses, which are keyed by this same "Book Chapter:Verse" shape.
- */
-function getRefRangeStart(ref) {
-  const match = ref.match(/^(.+?) (\d+):(\d+)/);
-  return match ? `${match[1]} ${match[2]}:${match[3]}` : null;
 }
 
 function buildSteinsaltzRef(ref) {
@@ -412,36 +398,6 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
     }));
 }
 
-/**
- * מפטיר isn't a separate aliyah — it re-reads the tail end of שביעי, which is
- * already fully rendered as part of it. So it needs no separate fetch and no
- * duplicated verses, just a marker dropped in front of the verse where it
- * actually begins.
- */
-function buildMaftirMarkerEl() {
-  const marker = document.createElement('div');
-  marker.className = 'maftir-marker';
-  marker.textContent = 'מפטיר';
-  return marker;
-}
-
-/**
- * Finds which of שביעי's already-fetched verse refs is where מפטיר begins.
- * Sefaria's aliyot[7] is only populated when Maftir is a genuinely different
- * reading (e.g. Rosh Chodesh, from a separate scroll) — on an ordinary week
- * it's absent even though Maftir still happens, it just repeats part of
- * שביעי. So: use aliyot[7]'s ref when it names one of שביעי's own verses,
- * and otherwise fall back to the standard custom of repeating (at least)
- * the last three verses.
- */
-function getMaftirStartRef(sevaRefs, maftirRef) {
-  const explicitStart = maftirRef ? getRefRangeStart(maftirRef) : null;
-  if (explicitStart && sevaRefs.includes(explicitStart)) {
-    return explicitStart;
-  }
-  return sevaRefs.length > 0 ? sevaRefs[Math.max(0, sevaRefs.length - 3)] : null;
-}
-
 
 // ─── Main Render ──────────────────────────────────────────────────────────────
 
@@ -536,21 +492,6 @@ async function render() {
         const groupEl = buildVerseGroupEl(texts);
         containerEl.appendChild(groupEl);
       });
-
-      // Friday completes the parasha — mark where מפטיר starts within
-      // שביעי's already-rendered verses. Maftir happens every week, whether
-      // or not Sefaria's calendar data calls out a distinct aliyot[7].
-      if (dayOfWeek === 5) {
-        const sevaTexts = allTexts[allTexts.length - 1];
-        const sevaRefs  = (sevaTexts.mikraRefs || []).filter(Boolean);
-        const maftirStart = getMaftirStartRef(sevaRefs, parashat.aliyot?.[7]);
-        const maftirTriplet = maftirStart
-          ? [...containerEl.querySelectorAll('.verse-triplet')].find(t => t.dataset.verseRef === maftirStart)
-          : null;
-        if (maftirTriplet) {
-          maftirTriplet.before(buildMaftirMarkerEl());
-        }
-      }
 
       const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true, dateParts });
       if (insightsStatus.status === 'error') {

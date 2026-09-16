@@ -1,7 +1,7 @@
 // Bump on any change to the cached assets below. app.js is served cache-first,
 // so a returning visitor keeps the old copy until this name changes — and an
 // old app.js talking to a new /api/daily-insights loses the פנינים entirely.
-const CACHE_NAME = 'mikra-v8';
+const CACHE_NAME = 'mikra-v9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

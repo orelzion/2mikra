@@ -245,25 +245,6 @@ body {
   margin-bottom: 0;
 }
 
-/* ── מפטיר marker: flags where it starts within שביעי's verses ── */
-.maftir-marker {
-  margin: 20px 0 14px;
-  text-align: center;
-  font-family: var(--font-rashi);
-  font-size: calc(var(--font-size) * 0.72px);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #6f6658;
-}
-
-.maftir-marker::before {
-  content: '';
-  display: block;
-  margin: 0 auto 8px;
-  width: min(160px, 35%);
-  border-bottom: 1px dashed #d8d0c3;
-}
-
 .layer {
   padding: 10px 0;
 }
