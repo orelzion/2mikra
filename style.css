@@ -245,6 +245,12 @@ body {
   margin-bottom: 0;
 }
 
+.verse-repeat {
+  margin-top: 30px;
+  padding-top: 25px;
+  border-top: 3px double var(--border-color);
+}
+
 .layer {
   padding: 10px 0;
 }

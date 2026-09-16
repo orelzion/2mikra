@@ -398,6 +398,27 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
     }));
 }
 
+/**
+ * At the end of the parasha, its last verse is shown again twice — bare
+ * mikra text only, no label, no Steinsaltz/Onkelos.
+ */
+function buildRepeatedVerseEl(verseHtml) {
+  const wrap = document.createElement('div');
+  wrap.className = 'verse-repeat';
+
+  for (let i = 0; i < 2; i++) {
+    const layer = document.createElement('div');
+    layer.className = 'layer layer-mikra';
+    const p = document.createElement('p');
+    p.className = 'verse';
+    p.innerHTML = sanitize(verseHtml);
+    layer.appendChild(p);
+    wrap.appendChild(layer);
+  }
+
+  return wrap;
+}
+
 
 // ─── Main Render ──────────────────────────────────────────────────────────────
 
@@ -492,6 +513,15 @@ async function render() {
         const groupEl = buildVerseGroupEl(texts);
         containerEl.appendChild(groupEl);
       });
+
+      // Friday completes the parasha — its last verse is repeated once more.
+      if (dayOfWeek === 5) {
+        const lastTexts = allTexts[allTexts.length - 1];
+        const lastVerse = lastTexts.mikra[lastTexts.mikra.length - 1];
+        if (lastVerse) {
+          containerEl.appendChild(buildRepeatedVerseEl(lastVerse));
+        }
+      }
 
       const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true, dateParts });
       if (insightsStatus.status === 'error') {
