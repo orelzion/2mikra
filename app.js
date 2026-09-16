@@ -89,15 +89,16 @@ function isSameJerusalemDay(a, b) {
 let viewAnchor = jerusalemTodayAnchor();
 
 // Maps Jerusalem weekday → aliyah array index/indices.
-// Friday base is [5, 6], with Maftir (7) appended when available in source aliyot.
-// Saturday returns null (Shabbat rest screen).
+// Saturday returns null (Shabbat rest screen). Maftir (aliyot[7]) is not a
+// separate aliyah — it's the closing repetition of שביעי's last verse, added
+// after the Friday reading (see buildMaftirRepeatEl).
 const DAY_TO_ALIYAH = {
   0: 0,       // Sunday    → 1st aliyah
   1: 1,       // Monday    → 2nd aliyah
   2: 2,       // Tuesday   → 3rd aliyah
   3: 3,       // Wednesday → 4th aliyah
   4: 4,       // Thursday  → 5th aliyah
-  5: [5, 6],  // Friday    → 6th & 7th aliyot (+ Maftir when present)
+  5: [5, 6],  // Friday    → 6th & 7th aliyot
   6: null,    // Saturday  → Shabbat screen
 };
 
@@ -109,7 +110,6 @@ const ALIYAH_SECTION_META = {
   4: { short: 'חמישי', full: 'עליית חמישי' },
   5: { short: 'שישי', full: 'עליית שישי' },
   6: { short: 'שביעי', full: 'עליית שביעי' },
-  7: { short: 'מפטיר', full: 'מפטיר' },
 };
 
 // ─── Font Size ────────────────────────────────────────────────────────────────
@@ -390,10 +390,6 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
   const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
   const indices = Array.isArray(aliyahIndex) ? [...aliyahIndex] : [aliyahIndex];
 
-  if (dayOfWeek === 5 && aliyot?.[7]) {
-    indices.push(7);
-  }
-
   return indices
     .filter(index => aliyot?.[index])
     .map(index => ({
@@ -402,6 +398,28 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
       shortLabel: ALIYAH_SECTION_META[index]?.short ?? 'עלייה',
       sectionLabel: ALIYAH_SECTION_META[index]?.full ?? 'עלייה',
     }));
+}
+
+/**
+ * מפטיר isn't a separate aliyah — it's the closing repetition of the
+ * parasha's last verse (שביעי's last pasuk), read again. Shown as the bare
+ * verse text only, twice, with no Steinsaltz/Onkelos and no section label.
+ */
+function buildMaftirRepeatEl(verseHtml) {
+  const wrap = document.createElement('div');
+  wrap.className = 'maftir-repeat';
+
+  for (let i = 0; i < 2; i++) {
+    const layer = document.createElement('div');
+    layer.className = 'layer layer-mikra';
+    const p = document.createElement('p');
+    p.className = 'verse';
+    p.innerHTML = sanitize(verseHtml);
+    layer.appendChild(p);
+    wrap.appendChild(layer);
+  }
+
+  return wrap;
 }
 
 
@@ -495,6 +513,15 @@ async function render() {
         const groupEl = buildVerseGroupEl(texts);
         containerEl.appendChild(groupEl);
       });
+
+      // Friday completes the parasha — מפטיר repeats שביעי's last verse.
+      if (dayOfWeek === 5 && parashat.aliyot?.[7]) {
+        const lastTexts = allTexts[allTexts.length - 1];
+        const lastVerse = lastTexts.mikra[lastTexts.mikra.length - 1];
+        if (lastVerse) {
+          containerEl.appendChild(buildMaftirRepeatEl(lastVerse));
+        }
+      }
 
       const insightsStatus = await loadPreGeneratedInsights(containerEl, { showFallbackMessage: true, dateParts });
       if (insightsStatus.status === 'error') {

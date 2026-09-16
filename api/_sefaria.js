@@ -12,13 +12,12 @@ export const DAY_TO_ALIYAH = {
   6: null,
 };
 
+// Maftir (aliyot[7]) is not fetched separately — it's just a repetition of
+// שביעי's last verse, which is already covered by aliyot[6]. Including it
+// here would generate insights for the same verses twice.
 export function getAliyahRefsForDay(dayOfWeek, aliyot) {
   const aliyahIndex = DAY_TO_ALIYAH[dayOfWeek];
   const indices = Array.isArray(aliyahIndex) ? [...aliyahIndex] : [aliyahIndex];
-
-  if (dayOfWeek === 5 && aliyot?.[7]) {
-    indices.push(7);
-  }
 
   return indices.map(i => aliyot[i]).filter(Boolean);
 }

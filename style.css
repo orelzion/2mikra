@@ -245,6 +245,13 @@ body {
   margin-bottom: 0;
 }
 
+/* ── מפטיר: the closing repetition of שביעי's last verse ── */
+.maftir-repeat {
+  margin-top: 30px;
+  padding-top: 25px;
+  border-top: 3px double var(--border-color);
+}
+
 .layer {
   padding: 10px 0;
 }
