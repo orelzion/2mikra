@@ -90,8 +90,9 @@ let viewAnchor = jerusalemTodayAnchor();
 
 // Maps Jerusalem weekday → aliyah array index/indices.
 // Saturday returns null (Shabbat rest screen). Maftir (aliyot[7]) is not a
-// separate aliyah — it's the closing repetition of שביעי's last verse, added
-// after the Friday reading (see buildMaftirRepeatEl).
+// separate aliyah — it re-reads the tail of שביעי, so it's only marked in
+// place within שביעי's verses (see buildMaftirMarkerEl), never fetched on
+// its own.
 const DAY_TO_ALIYAH = {
   0: 0,       // Sunday    → 1st aliyah
   1: 1,       // Monday    → 2nd aliyah
@@ -133,6 +134,17 @@ function convertRefFormat(ref) {
     .replace(/:/g, '.');         // colons → dots
     // Note: book names with internal spaces (e.g. "I Samuel") are already handled
     // because the pattern above only replaces spaces directly before a digit.
+}
+
+/**
+ * Extracts the first "Book Chapter:Verse" from a (possibly ranged) Sefaria
+ * ref, e.g. "Exodus 27:20-28:12" → "Exodus 27:20". Used to locate where
+ * aliyot[7] (Maftir) actually starts among the already-rendered שביעי
+ * verses, which are keyed by this same "Book Chapter:Verse" shape.
+ */
+function getRefRangeStart(ref) {
+  const match = ref.match(/^(.+?) (\d+):(\d+)/);
+  return match ? `${match[1]} ${match[2]}:${match[3]}` : null;
 }
 
 function buildSteinsaltzRef(ref) {
@@ -401,31 +413,17 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
 }
 
 /**
- * מפטיר isn't a separate aliyah — it's the closing repetition of the
- * parasha's last verse (שביעי's last pasuk), read again. A single label
- * marks where it starts (not repeated per verse); the verse itself is shown
- * bare, twice, with no Steinsaltz/Onkelos.
+ * מפטיר isn't a separate aliyah — it re-reads the tail end of שביעי, which is
+ * already fully rendered as part of it. So it needs no separate fetch and no
+ * duplicated verses, just a marker dropped in front of the verse where
+ * aliyot[7] actually begins, to flag "from here on, this is also read as
+ * Maftir".
  */
-function buildMaftirRepeatEl(verseHtml) {
-  const wrap = document.createElement('div');
-  wrap.className = 'maftir-repeat';
-
-  const label = document.createElement('span');
-  label.className = 'section-label';
-  label.textContent = 'מפטיר:';
-  wrap.appendChild(label);
-
-  for (let i = 0; i < 2; i++) {
-    const layer = document.createElement('div');
-    layer.className = 'layer layer-mikra';
-    const p = document.createElement('p');
-    p.className = 'verse';
-    p.innerHTML = sanitize(verseHtml);
-    layer.appendChild(p);
-    wrap.appendChild(layer);
-  }
-
-  return wrap;
+function buildMaftirMarkerEl() {
+  const marker = document.createElement('div');
+  marker.className = 'maftir-marker';
+  marker.textContent = 'מפטיר';
+  return marker;
 }
 
 
@@ -520,12 +518,16 @@ async function render() {
         containerEl.appendChild(groupEl);
       });
 
-      // Friday completes the parasha — מפטיר repeats שביעי's last verse.
+      // Friday completes the parasha — mark where מפטיר actually starts
+      // within שביעי's already-rendered verses (it may be more than the
+      // last one), rather than assuming it's always just the last pasuk.
       if (dayOfWeek === 5 && parashat.aliyot?.[7]) {
-        const lastTexts = allTexts[allTexts.length - 1];
-        const lastVerse = lastTexts.mikra[lastTexts.mikra.length - 1];
-        if (lastVerse) {
-          containerEl.appendChild(buildMaftirRepeatEl(lastVerse));
+        const maftirStart = getRefRangeStart(parashat.aliyot[7]);
+        const maftirTriplet = maftirStart
+          ? [...containerEl.querySelectorAll('.verse-triplet')].find(t => t.dataset.verseRef === maftirStart)
+          : null;
+        if (maftirTriplet) {
+          maftirTriplet.before(buildMaftirMarkerEl());
         }
       }
 
