@@ -402,12 +402,18 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
 
 /**
  * מפטיר isn't a separate aliyah — it's the closing repetition of the
- * parasha's last verse (שביעי's last pasuk), read again. Shown as the bare
- * verse text only, twice, with no Steinsaltz/Onkelos and no section label.
+ * parasha's last verse (שביעי's last pasuk), read again. A single label
+ * marks where it starts (not repeated per verse); the verse itself is shown
+ * bare, twice, with no Steinsaltz/Onkelos.
  */
 function buildMaftirRepeatEl(verseHtml) {
   const wrap = document.createElement('div');
   wrap.className = 'maftir-repeat';
+
+  const label = document.createElement('span');
+  label.className = 'section-label';
+  label.textContent = 'מפטיר:';
+  wrap.appendChild(label);
 
   for (let i = 0; i < 2; i++) {
     const layer = document.createElement('div');
