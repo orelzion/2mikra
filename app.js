@@ -89,10 +89,10 @@ function isSameJerusalemDay(a, b) {
 let viewAnchor = jerusalemTodayAnchor();
 
 // Maps Jerusalem weekday → aliyah array index/indices.
-// Saturday returns null (Shabbat rest screen). Maftir (aliyot[7]) is not a
-// separate aliyah — it re-reads the tail of שביעי, so it's only marked in
-// place within שביעי's verses (see buildMaftirMarkerEl), never fetched on
-// its own.
+// Saturday returns null (Shabbat rest screen). Maftir is not a separate
+// aliyah — on an ordinary week it re-reads the tail of שביעי from the same
+// scroll, so it's only marked in place within שביעי's verses (see
+// buildMaftirMarkerEl / getMaftirStartRef), never fetched on its own.
 const DAY_TO_ALIYAH = {
   0: 0,       // Sunday    → 1st aliyah
   1: 1,       // Monday    → 2nd aliyah
@@ -415,15 +415,31 @@ function getAliyahSectionsForDay(dayOfWeek, aliyot) {
 /**
  * מפטיר isn't a separate aliyah — it re-reads the tail end of שביעי, which is
  * already fully rendered as part of it. So it needs no separate fetch and no
- * duplicated verses, just a marker dropped in front of the verse where
- * aliyot[7] actually begins, to flag "from here on, this is also read as
- * Maftir".
+ * duplicated verses, just a marker dropped in front of the verse where it
+ * actually begins.
  */
 function buildMaftirMarkerEl() {
   const marker = document.createElement('div');
   marker.className = 'maftir-marker';
   marker.textContent = 'מפטיר';
   return marker;
+}
+
+/**
+ * Finds which of שביעי's already-fetched verse refs is where מפטיר begins.
+ * Sefaria's aliyot[7] is only populated when Maftir is a genuinely different
+ * reading (e.g. Rosh Chodesh, from a separate scroll) — on an ordinary week
+ * it's absent even though Maftir still happens, it just repeats part of
+ * שביעי. So: use aliyot[7]'s ref when it names one of שביעי's own verses,
+ * and otherwise fall back to the standard custom of repeating (at least)
+ * the last three verses.
+ */
+function getMaftirStartRef(sevaRefs, maftirRef) {
+  const explicitStart = maftirRef ? getRefRangeStart(maftirRef) : null;
+  if (explicitStart && sevaRefs.includes(explicitStart)) {
+    return explicitStart;
+  }
+  return sevaRefs.length > 0 ? sevaRefs[Math.max(0, sevaRefs.length - 3)] : null;
 }
 
 
@@ -457,8 +473,11 @@ async function render() {
 
   updateDateNav();
 
-  const isToday    = isSameJerusalemDay(viewAnchor, new Date());
-  const dateParts  = isToday ? null : getJerusalemDateParts(viewAnchor);
+  // Always the explicit viewed date, never omitted for "today" — if the tab
+  // is left open across Jerusalem midnight, viewAnchor still names the day
+  // on screen even though it's no longer the real "today", and generation
+  // must target that same day, not whatever the server now considers current.
+  const dateParts  = getJerusalemDateParts(viewAnchor);
   const dayOfWeek  = getJerusalemDayOfWeek(viewAnchor);
 
   setDateNavDisabled(true);
@@ -518,11 +537,13 @@ async function render() {
         containerEl.appendChild(groupEl);
       });
 
-      // Friday completes the parasha — mark where מפטיר actually starts
-      // within שביעי's already-rendered verses (it may be more than the
-      // last one), rather than assuming it's always just the last pasuk.
-      if (dayOfWeek === 5 && parashat.aliyot?.[7]) {
-        const maftirStart = getRefRangeStart(parashat.aliyot[7]);
+      // Friday completes the parasha — mark where מפטיר starts within
+      // שביעי's already-rendered verses. Maftir happens every week, whether
+      // or not Sefaria's calendar data calls out a distinct aliyot[7].
+      if (dayOfWeek === 5) {
+        const sevaTexts = allTexts[allTexts.length - 1];
+        const sevaRefs  = (sevaTexts.mikraRefs || []).filter(Boolean);
+        const maftirStart = getMaftirStartRef(sevaRefs, parashat.aliyot?.[7]);
         const maftirTriplet = maftirStart
           ? [...containerEl.querySelectorAll('.verse-triplet')].find(t => t.dataset.verseRef === maftirStart)
           : null;
@@ -571,6 +592,11 @@ function renderInsightsFallbackMessage(containerEl, message, { canRetry = false,
 }
 
 function buildInsightsRetryButton(containerEl, fallbackEl, textEl, dateParts) {
+  // Snapshotted now, not read at click time: shiftAnchorDays always assigns a
+  // *new* Date object, so this stays the anchor that was showing when the
+  // button was built even after viewAnchor is reassigned by navigation.
+  const requestedAnchor = viewAnchor;
+
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'insights-retry';
@@ -608,6 +634,11 @@ function buildInsightsRetryButton(containerEl, fallbackEl, textEl, dateParts) {
       failure = 'לא הצלחנו לייצר פנינים כרגע.';
     }
 
+    // The user may have navigated to a different day while this was in
+    // flight — containerEl now holds that day's content, so don't overwrite
+    // it with a status message or a lookup for the day this button was for.
+    if (viewAnchor !== requestedAnchor) return;
+
     if (failure) {
       textEl.textContent = failure;
       button.disabled = false;
@@ -623,8 +654,12 @@ function buildInsightsRetryButton(containerEl, fallbackEl, textEl, dateParts) {
 }
 
 /**
- * Load and render pre-generated insights.
- * @returns {{status: 'loaded'|'empty'|'error', reason?: string, renderedCount?: number}}
+ * Load and render pre-generated insights. A verse ref that's present in the
+ * response (even with an empty array) has been attempted; one that's absent
+ * has not. Retry is only worth offering when some verse was never attempted
+ * — a fully-attempted reading with no gems anywhere has nothing more to gain
+ * from generating again.
+ * @returns {{status: 'loaded'|'partial'|'empty'|'error', reason?: string, renderedCount?: number}}
  */
 async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = false, dateParts = null } = {}) {
   try {
@@ -648,17 +683,16 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
     }
 
     const data = await res.json();
-    if (!data.insights || Object.keys(data.insights).length === 0) {
-      if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים להיום.', { canRetry: true, dateParts });
-      }
-      return { status: 'empty', reason: 'no insights' };
-    }
+    const insightsMap = data.insights || {};
 
-    let renderedCount = 0;
+    let renderedCount  = 0;
+    let attemptedCount = 0;
 
     for (const triplet of triplets) {
-      const insights = data.insights[triplet.dataset.verseRef];
+      const ref = triplet.dataset.verseRef;
+      if (Object.prototype.hasOwnProperty.call(insightsMap, ref)) attemptedCount += 1;
+
+      const insights = insightsMap[ref];
       if (!insights || insights.length === 0) continue;
       // Guard against a re-render appending a second פנינים block
       if (triplet.querySelector('.mefarshim-container')) continue;
@@ -701,11 +735,23 @@ async function loadPreGeneratedInsights(containerEl, { showFallbackMessage = fal
       renderedCount += 1;
     }
 
-    if (renderedCount === 0) {
+    // Some verses were never generated at all (not even "no gems found") —
+    // offer retry so a run that hit the deadline or a batch failure can be
+    // completed, since there's no cron left to gap-fill it automatically.
+    if (attemptedCount < triplets.length) {
       if (showFallbackMessage) {
-        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.', { canRetry: true, dateParts });
+        const message = renderedCount > 0 ? 'חלק מהפנינים עדיין לא נוצרו.' : 'אין פנינים זמינים להיום.';
+        renderInsightsFallbackMessage(containerEl, message, { canRetry: true, dateParts });
       }
-      return { status: 'empty', reason: 'no rendered insights' };
+      return { status: 'partial', renderedCount, attemptedCount, total: triplets.length };
+    }
+
+    if (renderedCount === 0) {
+      // Fully attempted, genuinely nothing found — retrying can't help.
+      if (showFallbackMessage) {
+        renderInsightsFallbackMessage(containerEl, 'אין פנינים זמינים לקטע זה.');
+      }
+      return { status: 'empty', reason: 'no gems for any verse' };
     }
 
     return { status: 'loaded', renderedCount };

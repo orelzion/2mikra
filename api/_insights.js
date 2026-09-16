@@ -157,12 +157,17 @@ export const INSIGHTS_SCHEMA = {
  * Anything else is dropped and logged — a gem can never land on a verse the
  * model was not given.
  *
+ * Every verse in `records` is included in the result, even with an empty
+ * `pearls` array — the model is told to omit verses with no gems, but the
+ * caller still needs to tell "attempted, nothing found" apart from "never
+ * attempted" so it knows what's safe to skip on a later gap-fill.
+ *
  * @returns {Array<{ref: string, pearls: Array<{commentator: string, insight: string}>}>}
  */
 export function validateBatchResponse(parsed, records, log = console.warn) {
   const allowed = new Set(records.map(r => r.ref));
   const entries = Array.isArray(parsed?.insights) ? parsed.insights : [];
-  const byRef   = new Map();
+  const byRef   = new Map(records.map(r => [r.ref, []]));
 
   for (const entry of entries) {
     const chapter = Number(entry?.chapter);
@@ -189,9 +194,7 @@ export function validateBatchResponse(parsed, records, log = console.warn) {
     if (pearls.length === 0) continue;
 
     // A model that splits one verse across two entries gets merged, not dropped.
-    const existing = byRef.get(ref);
-    if (existing) existing.push(...pearls);
-    else byRef.set(ref, pearls);
+    byRef.get(ref).push(...pearls);
   }
 
   return [...byRef].map(([ref, pearls]) => ({ ref, pearls }));

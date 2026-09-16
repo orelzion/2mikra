@@ -1,7 +1,10 @@
 // GET /api/daily-insights?refs=Genesis 12:1,Genesis 12:2
 // Returns pre-generated insights keyed by verse ref:
 //   { "insights": { "Genesis 12:1": [ {commentator, insight}, … ] } }
-// Refs with no stored insights are simply omitted.
+// A ref can map to an empty array — that verse was generated but had no
+// gems worth surfacing, which the client treats differently from a ref
+// that's absent entirely (never generated). Refs with no stored key at all
+// are simply omitted.
 
 import { Redis } from '@upstash/redis';
 import { refToKvKey } from './_sefaria.js';
