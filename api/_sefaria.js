@@ -47,6 +47,38 @@ export function getJerusalemParts(explicitDate = null) {
   };
 }
 
+// וזאת הברכה is never a regular Shabbat parasha, so the calendar API never
+// hands it out — for its week it returns a holiday reading instead. Mirrors
+// VEZOT_HABERACHA / isVezotHaberachaWeek in app.js; see the comment there.
+export const VEZOT_HABERACHA = {
+  name: 'וזאת הברכה',
+  aliyot: [
+    'Deuteronomy 33:1-7',
+    'Deuteronomy 33:8-12',
+    'Deuteronomy 33:13-17',
+    'Deuteronomy 33:18-21',
+    'Deuteronomy 33:22-26',
+    'Deuteronomy 33:27-29',
+    'Deuteronomy 34:1-12',
+  ],
+};
+
+/**
+ * True when the Shabbat ending this Jerusalem calendar day's week falls on
+ * 16–22 Tishrei — the week וזאת הברכה is read.
+ */
+export function isVezotHaberachaWeek({ year, month, day }, dayOfWeek) {
+  const shabbat = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day) + (6 - dayOfWeek), 12));
+  const parts = new Intl.DateTimeFormat('en-u-ca-hebrew', {
+    timeZone: 'Asia/Jerusalem',
+    month: 'long',
+    day: 'numeric',
+  }).formatToParts(shabbat);
+  const hebMonth = parts.find(p => p.type === 'month').value;
+  const hebDay   = Number(parts.find(p => p.type === 'day').value);
+  return hebMonth === 'Tishri' && hebDay >= 16 && hebDay <= 22;
+}
+
 export function convertRefFormat(ref) {
   return ref
     .replace(/ (\d)/g, '.$1')
