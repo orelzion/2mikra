@@ -7,6 +7,8 @@ import { Redis } from '@upstash/redis';
 import {
   getAliyahRefsForDay,
   getJerusalemParts,
+  isVezotHaberachaWeek,
+  VEZOT_HABERACHA,
   fetchAliyahTexts,
   fetchCommentaries,
   refToKvKey,
@@ -259,43 +261,53 @@ export default async function handler(req, res) {
   }
 
   try {
-    return await generate({ req, res, redis, start, dateKey, dayOfWeek, explicitDate });
+    return await generate({ req, res, redis, start, dateKey, dateParts: { year, month, day }, dayOfWeek, explicitDate });
   } finally {
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }
 }
 
-async function generate({ res, redis, start, dateKey, dayOfWeek, explicitDate }) {
-  // Fetch parasha calendar from Sefaria
-  console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
-  const t1 = Date.now();
-  const calParams = new URLSearchParams({ diaspora: '0' });
-  if (explicitDate) {
-    calParams.set('year', String(explicitDate.year));
-    calParams.set('month', String(explicitDate.month));
-    calParams.set('day', String(explicitDate.day));
-  }
-  const calRes = await fetch(`https://www.sefaria.org/api/calendars?${calParams.toString()}`);
-  if (!calRes.ok) {
-    console.error(`[generate-daily-insights] calendar fetch failed — HTTP ${calRes.status}`);
-    return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
-  }
-  const calendar = await calRes.json();
-  console.log(`[generate-daily-insights] calendar fetched (${Date.now() - t1}ms)`);
+async function generate({ res, redis, start, dateKey, dateParts, dayOfWeek, explicitDate }) {
+  let parashaName;
+  let aliyot;
 
-  const parashat = (calendar.calendar_items || []).find(i => i.title?.en === 'Parashat Hashavua');
-  if (!parashat) {
-    return res.status(404).json({ error: 'Parashat Hashavua not found in calendar' });
+  if (isVezotHaberachaWeek(dateParts, dayOfWeek)) {
+    parashaName = VEZOT_HABERACHA.name;
+    aliyot      = VEZOT_HABERACHA.aliyot;
+  } else {
+    // Fetch parasha calendar from Sefaria
+    console.log(`[generate-daily-insights] fetching Sefaria calendar...`);
+    const t1 = Date.now();
+    const calParams = new URLSearchParams({ diaspora: '0' });
+    if (explicitDate) {
+      calParams.set('year', String(explicitDate.year));
+      calParams.set('month', String(explicitDate.month));
+      calParams.set('day', String(explicitDate.day));
+    }
+    const calRes = await fetch(`https://www.sefaria.org/api/calendars?${calParams.toString()}`);
+    if (!calRes.ok) {
+      console.error(`[generate-daily-insights] calendar fetch failed — HTTP ${calRes.status}`);
+      return res.status(502).json({ error: 'Sefaria calendar fetch failed' });
+    }
+    const calendar = await calRes.json();
+    console.log(`[generate-daily-insights] calendar fetched (${Date.now() - t1}ms)`);
+
+    const parashat = (calendar.calendar_items || []).find(i => i.title?.en === 'Parashat Hashavua');
+    if (!parashat) {
+      return res.status(404).json({ error: 'Parashat Hashavua not found in calendar' });
+    }
+
+    parashaName = parashat.displayValue?.en;
+    aliyot      = parashat.extraDetails?.aliyot || [];
   }
 
-  const aliyot     = parashat.extraDetails?.aliyot || [];
   const aliyahRefs = getAliyahRefsForDay(dayOfWeek, aliyot);
 
   if (aliyahRefs.length === 0) {
     return res.status(404).json({ error: 'No aliyah refs found', dayOfWeek });
   }
 
-  console.log(`[generate-daily-insights] parasha=${parashat.displayValue?.en} refs=${aliyahRefs.join(', ')}`);
+  console.log(`[generate-daily-insights] parasha=${parashaName} refs=${aliyahRefs.join(', ')}`);
 
   // Fetch mikra texts + commentaries in parallel
   console.log(`[generate-daily-insights] fetching mikra + commentaries from Sefaria...`);

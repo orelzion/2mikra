@@ -60,7 +60,8 @@ Return `null` for Saturday to trigger the Shabbat screen.
 ## Edge Cases
 
 - **Double Parashiyot:** Trust the Sefaria calendar API as-is. The `aliyot` array will reflect the combined reading — no special handling needed.
-- **Holidays:** The calendar API may return a different entry; no special handling required for MVP.
+- **Holidays:** The calendar API may return a holiday reading as "Parashat Hashavua"; trusted as-is, except for the one case below.
+- **וזאת הברכה:** Never a regular Shabbat parasha, so the calendar API never returns it. The week whose Shabbat falls on 16–22 Tishrei shows it instead (hardcoded `VEZOT_HABERACHA` aliyot, no calendar call): when Simchat Torah is on Shabbat that's its own week, otherwise it's the week of Shabbat Chol HaMoed, right before Shabbat Bereshit. Implemented in `isVezotHaberachaWeek` in both `app.js` and `api/_sefaria.js`.
 - **Friday midnight boundary:** Use midnight (00:00:00 Jerusalem time) as the day boundary, not sunset.
 
 ## Responsibilities

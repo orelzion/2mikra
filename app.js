@@ -84,6 +84,39 @@ function isSameJerusalemDay(a, b) {
   return pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
 }
 
+/**
+ * Hebrew calendar day and month name (English, e.g. "Tishri") of a moment in
+ * Jerusalem. ICU always spells the month out for the Hebrew calendar, even
+ * when asked for a numeric month, so callers compare names.
+ */
+function getJerusalemHebrewDate(date) {
+  const parts = new Intl.DateTimeFormat('en-u-ca-hebrew', {
+    timeZone: 'Asia/Jerusalem',
+    month: 'long',
+    day: 'numeric',
+  }).formatToParts(date);
+  return {
+    month: parts.find(p => p.type === 'month').value,
+    day:   Number(parts.find(p => p.type === 'day').value),
+  };
+}
+
+/**
+ * וזאת הברכה is never a regular Shabbat parasha, so the calendar API never
+ * hands it out — for these weeks it returns a holiday reading instead. It
+ * belongs to the week whose Shabbat falls on 16–22 Tishrei: when Simchat
+ * Torah (22 Tishrei in Israel) is itself on Shabbat, that's its own week;
+ * otherwise it's the week of Shabbat Chol HaMoed Sukkot, right before
+ * Shabbat Bereshit. 15 and 22 Tishrei share a weekday, so exactly one
+ * Shabbat lands in that range every year.
+ */
+function isVezotHaberachaWeek(dateParts) {
+  const anchor  = jerusalemAnchor(dateParts);
+  const shabbat = shiftAnchorDays(anchor, 6 - getJerusalemDayOfWeek(anchor));
+  const { month, day } = getJerusalemHebrewDate(shabbat);
+  return month === 'Tishri' && day >= 16 && day <= 22;
+}
+
 // The day currently being viewed. Defaults to today; the back/next controls
 // move it a day at a time and trigger a full re-render.
 let viewAnchor = jerusalemTodayAnchor();
@@ -98,6 +131,20 @@ const DAY_TO_ALIYAH = {
   4: 4,       // Thursday  → 5th aliyah
   5: [5, 6],  // Friday    → 6th & 7th aliyot
   6: null,    // Saturday  → Shabbat screen
+};
+
+// Mirrors VEZOT_HABERACHA in api/_sefaria.js.
+const VEZOT_HABERACHA = {
+  name: 'וזאת הברכה',
+  aliyot: [
+    'Deuteronomy 33:1-7',
+    'Deuteronomy 33:8-12',
+    'Deuteronomy 33:13-17',
+    'Deuteronomy 33:18-21',
+    'Deuteronomy 33:22-26',
+    'Deuteronomy 33:27-29',
+    'Deuteronomy 34:1-12',
+  ],
 };
 
 const ALIYAH_SECTION_META = {
@@ -162,6 +209,10 @@ async function fetchCalendar(dateParts = null) {
 }
 
 async function getCurrentWeekParashat(dateParts = null) {
+  if (isVezotHaberachaWeek(dateParts ?? getJerusalemDateParts())) {
+    return VEZOT_HABERACHA;
+  }
+
   const calendar = await fetchCalendar(dateParts);
   const item = (calendar.calendar_items || []).find(
     i => i.title && i.title.en === 'Parashat Hashavua'
