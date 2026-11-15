@@ -262,9 +262,13 @@ function selectVersion(data, preferredTitles) {
 function flattenVersesWithRefs(data, text) {
   const book     = data?.indexTitle;
   const sections = data?.sections;
-  const hasRefs  = !!(book && sections && sections.length >= 2);
-  const startChapter = hasRefs ? sections[0] : 0;
-  const startVerse   = hasRefs ? sections[1] : 0;
+  // Sefaria sends `sections` as strings (["28", "10"]); without Number() the
+  // `startVerse + i` below is concatenation ("10" + 2 → "102"). Must stay in
+  // step with startOf in api/_sefaria.js or the client and generator disagree
+  // about which verse a פנינים entry belongs to.
+  const startChapter = Number(sections?.[0]);
+  const startVerse   = Number(sections?.[1]);
+  const hasRefs  = !!(book && Number.isInteger(startChapter) && Number.isInteger(startVerse));
 
   const pairs = [];
 

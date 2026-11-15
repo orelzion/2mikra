@@ -123,53 +123,91 @@ export function flattenVerses(text) {
   });
 }
 
-export function flattenCommentaryVerses(text) {
-  if (!text) return [];
-  if (typeof text === 'string') return [[text.trim()]].filter(Boolean);
-  if (text.every(v => typeof v === 'string')) return text.map(v => [v.trim()].filter(Boolean));
-  return text.flatMap(chapter => {
-    if (typeof chapter === 'string') return [[chapter.trim()]].filter(Boolean);
-    return chapter.map(v => {
-      if (Array.isArray(v)) return v.filter(Boolean).map(c => c.trim());
-      if (typeof v === 'string') return [v.trim()];
-      return [];
-    });
-  });
+// How many array levels deep the strings sit. For a commentary the leaves are
+// individual comments, so this tells us how many of [chapter][verse][comment]
+// Sefaria kept: it drops the levels the requested range doesn't span.
+//   1 → one verse         [comment, …]
+//   2 → one chapter       [verse][comment]          ("Genesis 28:10-22")
+//   3 → across chapters   [chapter][verse][comment] ("Genesis 29:18-30:13")
+export function nestingDepth(text) {
+  if (!Array.isArray(text)) return 0;
+  let deepest = 0;
+  for (const child of text) deepest = Math.max(deepest, nestingDepth(child));
+  return 1 + deepest;
 }
 
-export function deriveVerseRefs(data, text) {
-  const book = data?.indexTitle;
-  const sections = data?.sections;
-  if (!book || !sections || sections.length < 2 || !text) return [];
+/**
+ * Index one commentator's Sefaria response by verse: Map of "Genesis 28:10" →
+ * [comment, …]. Verses the commentator doesn't discuss are simply absent.
+ *
+ * Keyed by chapter:verse rather than flattened into a positional array, because
+ * position drifts in two ways and every drift lands a comment on the wrong verse:
+ *  - a verse with several comments (Rashi often has 3-5) would occupy several
+ *    slots, pushing every later verse's commentary further out of place;
+ *  - Sefaria trims trailing empty verses per chapter (Ramban on 29:18-30:13 has
+ *    14 entries for the 18 verses of chapter 29), so in a multi-chapter range
+ *    everything after the first chapter boundary shifts.
+ *
+ * `book` comes from the aliyah ref, not the response: a commentary's
+ * `indexTitle` is "Rashi on Genesis", which isn't the mikra book name the verse
+ * refs (and therefore the KV keys) are built from.
+ */
+export function commentaryByVerse(book, data, text) {
+  const byVerse = new Map();
+  const start = startOf(data);
+  if (!book || !start || text == null) return byVerse;
 
-  const startChapter = sections[0];
-  const startVerse = sections[1];
-  const refs = [];
+  const put = (chapter, verse, comments) => {
+    const list = (Array.isArray(comments) ? comments : [comments])
+      .filter(c => typeof c === 'string' && c.trim())
+      .map(c => c.trim());
+    if (list.length) byVerse.set(`${book} ${chapter}:${verse}`, list);
+  };
 
-  if (typeof text === 'string') {
-    refs.push(`${book} ${startChapter}:${startVerse}`);
-  } else if (text.every(v => typeof v === 'string')) {
-    text.forEach((_, i) => refs.push(`${book} ${startChapter}:${startVerse + i}`));
+  const depth = nestingDepth(text);
+
+  if (depth <= 1) {
+    put(start.chapter, start.verse, text);
+  } else if (depth === 2) {
+    text.forEach((comments, v) => put(start.chapter, start.verse + v, comments));
   } else {
-    text.forEach((chapter, chIdx) => {
-      const chapterNum = startChapter + chIdx;
-      const verseStart = chIdx === 0 ? startVerse : 1;
-      const verses = Array.isArray(chapter) ? chapter : (chapter ? [chapter] : []);
-      verses.forEach((_, vIdx) => refs.push(`${book} ${chapterNum}:${verseStart + vIdx}`));
+    text.forEach((chapterVerses, c) => {
+      const chapter    = start.chapter + c;
+      const firstVerse = c === 0 ? start.verse : 1;
+      if (!Array.isArray(chapterVerses)) return;
+      chapterVerses.forEach((comments, v) => put(chapter, firstVerse + v, comments));
     });
   }
 
-  return refs;
+  return byVerse;
+}
+
+// Where a Sefaria v3 response starts: { book, chapter, verse } as real numbers,
+// or null when the response carries no usable position.
+//
+// Sefaria returns `sections` as STRINGS (["28", "10"]). Adding to one is string
+// concatenation — "10" + 2 === "102" — which silently turned verse 12 into
+// "Genesis 28:102" and, for multi-chapter ranges, chapter 29+1 into "291". The
+// coercion has to happen before any arithmetic, and has to match app.js.
+function startOf(data) {
+  const book     = data?.indexTitle;
+  const sections = data?.sections;
+  if (!book || !Array.isArray(sections) || sections.length < 2) return null;
+
+  const chapter = Number(sections[0]);
+  const verse   = Number(sections[1]);
+  if (!Number.isInteger(chapter) || !Number.isInteger(verse)) return null;
+  return { book, chapter, verse };
 }
 
 // Walks text and the ref structure simultaneously so verses[i] and verseRefs[i]
 // are guaranteed to point to the same segment — filtering is applied once, to both.
-function flattenVersesWithRefs(data, text) {
-  const book = data?.indexTitle;
-  const sections = data?.sections;
-  const hasRefs = !!(book && sections && sections.length >= 2);
-  const startChapter = hasRefs ? sections[0] : 0;
-  const startVerse   = hasRefs ? sections[1] : 0;
+export function flattenVersesWithRefs(data, text) {
+  const start = startOf(data);
+  const book = start?.book;
+  const hasRefs = !!start;
+  const startChapter = hasRefs ? start.chapter : 0;
+  const startVerse   = hasRefs ? start.verse   : 0;
 
   const pairs = [];
 
@@ -210,7 +248,12 @@ export async function fetchAliyahTexts(ref) {
   };
 }
 
+/**
+ * Returns one Map per commentator ("Genesis 28:10" → [comment, …]) — look
+ * verses up by ref; see commentaryByVerse for why there is no positional array.
+ */
 export async function fetchCommentaries(ref) {
+  const book = ref.slice(0, ref.lastIndexOf(' '));
   const [rashiData, rambanData, haamekDavarData, ravHirschData] = await Promise.all([
     fetchText(`Rashi_on_${convertRefFormat(ref)}`),
     fetchText(`Ramban_on_${convertRefFormat(ref)}`),
@@ -224,22 +267,24 @@ export async function fetchCommentaries(ref) {
   const ravHirschVersion   = ravHirschData?.versions?.[0];
 
   return {
-    rashi:       flattenCommentaryVerses(rashiVersion?.text       ?? null),
-    ramban:      flattenCommentaryVerses(rambanVersion?.text      ?? null),
-    haamekDavar: flattenCommentaryVerses(haamekDavarVersion?.text ?? null),
-    ravHirsch:   flattenCommentaryVerses(ravHirschVersion?.text   ?? null),
+    rashi:       commentaryByVerse(book, rashiData,       rashiVersion?.text       ?? null),
+    ramban:      commentaryByVerse(book, rambanData,      rambanVersion?.text      ?? null),
+    haamekDavar: commentaryByVerse(book, haamekDavarData, haamekDavarVersion?.text ?? null),
+    ravHirsch:   commentaryByVerse(book, ravHirschData,   ravHirschVersion?.text   ?? null),
   };
 }
 
-// v2 namespace: v1 keys were written by the positional generator, which could
-// attach a gem to the wrong verse. The key format is otherwise identical, so
-// without the version those suspect values would be read back as "already
-// generated" and setnx would block the validated pipeline from correcting them.
-// Bumping the namespace regenerates everything through the ref-validated path.
-export const KV_NAMESPACE = 'insights:v2';
+// Bump whenever stored values may be wrong, because the key format is otherwise
+// unchanged and generation is setnx: a suspect value would be read back as
+// "already generated" and block the corrected pipeline from replacing it.
+//   v1 → v2: the positional generator could attach a gem to the wrong verse.
+//   v2 → v3: the commentary fed to Gemini was itself misaligned (each comment
+//            took its own verse slot), and string `sections` produced garbage
+//            refs like "Genesis 28:102". See commentaryByVerse / startOf.
+export const KV_NAMESPACE = 'insights:v3';
 
 export function refToKvKey(ref) {
-  // "Genesis 1:1" → "insights:v2:Genesis:1:1"
+  // "Genesis 1:1" → "insights:v3:Genesis:1:1"
   const spaceIdx = ref.lastIndexOf(' ');
   const book = ref.slice(0, spaceIdx);
   const [chapter, verse] = ref.slice(spaceIdx + 1).split(':');
