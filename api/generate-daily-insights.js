@@ -322,15 +322,18 @@ async function generate({ res, redis, start, dateKey, dateParts, dayOfWeek, expl
   const verseRefs   = mikraResults.flatMap(r => r.verseRefs);
   const torahVerses = mikraArrays.flat();
 
-  // Flatten commentaries aligned to torahVerses
+  // Commentaries aligned to torahVerses, looked up by verse ref — never by
+  // position. Sefaria's commentary arrays don't line up with the verse list
+  // (several comments per verse, trimmed trailing empties), so indexing them
+  // by verse number feeds Gemini the wrong commentary for most verses.
   const combined = { rashi: [], ramban: [], haamekDavar: [], ravHirsch: [] };
-  mikraArrays.forEach((mikraVerses, aliyahPos) => {
+  mikraResults.forEach((mikra, aliyahPos) => {
     const c = commentariesArray[aliyahPos] || {};
-    for (let v = 0; v < mikraVerses.length; v++) {
-      combined.rashi.push(c.rashi?.[v] || []);
-      combined.ramban.push(c.ramban?.[v] || []);
-      combined.haamekDavar.push(c.haamekDavar?.[v] || []);
-      combined.ravHirsch.push(c.ravHirsch?.[v] || []);
+    for (const verseRef of mikra.verseRefs) {
+      combined.rashi.push(c.rashi?.get(verseRef) || []);
+      combined.ramban.push(c.ramban?.get(verseRef) || []);
+      combined.haamekDavar.push(c.haamekDavar?.get(verseRef) || []);
+      combined.ravHirsch.push(c.ravHirsch?.get(verseRef) || []);
     }
   });
 
